@@ -64,7 +64,10 @@ Usa la ruta real del wrapper mostrada por el instalador; consulta la sintaxis de
 - `Alt+Izquierda`: volver.
 - `Alt+Arriba`: carpeta superior.
 - `Ctrl+L`: seleccionar la ruta para editarla.
+- `Ctrl+F`: enfocar la búsqueda local por subcadena de nombre, sin distinguir mayúsculas. Escape o «Limpiar búsqueda» la vacían. Se conserva al refrescar o ante errores y se limpia al cambiar de carpeta correctamente; el contador indica coincidencias y total.
 - `Ctrl+1`: cuadrícula de iconos grandes.
 - `Ctrl+2`: lista.
+
+Explorer solicita al arrancar la maximización que respeta las barras. En Hyprland con API Lua usa `hyprctl eval` únicamente sobre la ventana mapeada de este proceso con título «Explorer»; espera y reintenta brevemente si aún no está mapeada. Si es flotante, ajusta su geometría normal al área útil del monitor, teniendo en cuenta escala, rotación y reservas; «Restaurar» la centra con tamaño 900x620 limitado al área disponible. En mosaico utiliza la maximización nativa del compositor. En otros compositores o sin esa API recurre a la maximización nativa de Qt. No modifica la configuración del compositor. El smoke muestra las geometrías medidas al maximizar, restaurar y maximizar de nuevo.
 - `F5`: actualizar la carpeta.
 - `Enter` en la cuadrícula o lista: abrir la entrada seleccionada; flechas para seleccionarla.

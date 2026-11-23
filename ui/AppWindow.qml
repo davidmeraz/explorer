@@ -3,19 +3,75 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Wayland
+import Quickshell.Io
 import "components"
 
 FloatingWindow {
     id: window
     required property AppBridge bridge
     title: "Explorer"
+    property bool fitWorkArea: true
+    property int attempts: 0
+    property bool requestedFit: true
     implicitWidth: 900
     implicitHeight: 620
+    function applyFit() {
+        if (fitProcess.running) return;
+        requestedFit = fitWorkArea;
+        if (!Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE")) { maximized = fitWorkArea; return; }
+        const pid = Number(Quickshell.processId);
+        if (!Number.isInteger(pid) || pid <= 0) { maximized = fitWorkArea; return; }
+        fitProcess.command = ["hyprctl", "eval", `
+for _, w in ipairs(hl.get_windows()) do
+    if w.pid == ${pid} and w.title == "Explorer" and w.mapped then
+        if not w.floating then
+            hl.dispatch(hl.dsp.window.fullscreen({window=w, mode="maximized", action="${fitWorkArea ? "set" : "unset"}"}))
+            return
+        end
+        local m, r = w.monitor, w.monitor.reserved
+        local width, height = m.width, m.height
+        if m.transform % 2 == 1 then width, height = height, width end
+        width = math.floor(width / m.scale + 0.5) - r.left - r.right
+        height = math.floor(height / m.scale + 0.5) - r.top - r.bottom
+        local targetWidth = ${fitWorkArea ? "width" : "math.min(900, width)"}
+        local targetHeight = ${fitWorkArea ? "height" : "math.min(620, height)"}
+        local x = m.x + r.left + math.floor((width - targetWidth) / 2)
+        local y = m.y + r.top + math.floor((height - targetHeight) / 2)
+        hl.dispatch(hl.dsp.window.resize({window=w, x=targetWidth, y=targetHeight, relative=false}))
+        hl.dispatch(hl.dsp.window.move({window=w, x=x, y=y, relative=false}))
+        return
+    end
+end
+error("window not mapped")`];
+        fitProcess.running = true;
+    }
+    function toggleFit() {
+        fitWorkArea = !fitWorkArea;
+        attempts = 0;
+        retry.restart();
+    }
+    Timer { id: retry; interval: 150; onTriggered: window.applyFit() }
+    Process {
+        id: fitProcess
+        stderr: SplitParser { onRead: data => console.warn("Hyprland: " + data) }
+        onExited: (exitCode, exitStatus) => {
+            if (window.requestedFit !== window.fitWorkArea) { retry.restart(); return; }
+            if (exitCode !== 0) {
+                if (++window.attempts < 20) retry.restart();
+                else window.maximized = window.fitWorkArea;
+            }
+        }
+    }
+    Component.onCompleted: retry.start()
     minimumSize: Qt.size(480, 360)
     color: "transparent"
     visible: true
     property bool gridMode: true
     property bool editingPath: false
+    property string listedPath: ""
+    readonly property alias searchField: search
+    readonly property var filteredEntries: bridge.entries.filter(entry => entry.name.toLowerCase().includes(search.text.toLowerCase()))
+    onFilteredEntriesChanged: Qt.callLater(() => { listing.currentIndex = -1; grid.currentIndex = -1; })
     readonly property alias gridView: grid
     readonly property alias listView: listing
     function switchView(useGrid) {
@@ -75,6 +131,22 @@ FloatingWindow {
             }
             Item { Layout.fillWidth: true }
             Text { text: bridge.loading ? "Cargando…" : "EXPLORADOR DE ARCHIVOS"; font.pixelSize: 10; font.letterSpacing: 1; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
+            ActionButton { text: window.fitWorkArea ? "Restaurar" : "Maximizar"; Accessible.name: text + " ventana"; onClicked: window.toggleFit() }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            TextField {
+                id: search
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                placeholderText: "Buscar por nombre en esta carpeta (Ctrl+F)"
+                Accessible.name: "Buscar por nombre en esta carpeta"
+                selectByMouse: true
+                color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+                background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
+                Keys.onEscapePressed: (event) => { clear(); event.accepted = true; }
+            }
+            ActionButton { text: "Limpiar búsqueda"; enabled: search.text.length > 0; onClicked: { search.clear(); search.forceActiveFocus(); } }
         }
         RowLayout {
             Layout.fillWidth: true
@@ -162,11 +234,11 @@ FloatingWindow {
                     visible: !window.gridMode
                     clip: true
                     focus: true
-                    model: bridge.entries
+                    model: window.filteredEntries
                     currentIndex: -1
                     ScrollBar.vertical: ScrollBar { }
-                    Keys.onReturnPressed: window.openEntry(bridge.entries[currentIndex])
-                    Keys.onEnterPressed: window.openEntry(bridge.entries[currentIndex])
+                    Keys.onReturnPressed: window.openEntry(window.filteredEntries[currentIndex])
+                    Keys.onEnterPressed: window.openEntry(window.filteredEntries[currentIndex])
                     delegate: Rectangle {
                         id: row
                         required property var modelData
@@ -188,8 +260,8 @@ FloatingWindow {
                     }
                     Text {
                         anchors.centerIn: parent
-                        visible: bridge.entries.length === 0
-                        text: bridge.loading ? "Cargando carpeta…" : (bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…")
+                        visible: window.filteredEntries.length === 0
+                        text: bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
                         color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 14
                     }
                 }
@@ -200,13 +272,13 @@ FloatingWindow {
                     visible: window.gridMode
                     focus: window.gridMode
                     clip: true
-                    cellWidth: 130
+                    cellWidth: width / Math.max(1, Math.floor(width / 130))
                     cellHeight: 132
-                    model: bridge.entries
+                    model: window.filteredEntries
                     currentIndex: -1
                     ScrollBar.vertical: ScrollBar { }
-                    Keys.onReturnPressed: window.openEntry(bridge.entries[currentIndex])
-                    Keys.onEnterPressed: window.openEntry(bridge.entries[currentIndex])
+                    Keys.onReturnPressed: window.openEntry(window.filteredEntries[currentIndex])
+                    Keys.onEnterPressed: window.openEntry(window.filteredEntries[currentIndex])
                     delegate: ExplorerIconCard {
                         required property var modelData
                         required property int index
@@ -224,8 +296,8 @@ FloatingWindow {
                     }
                     Text {
                         anchors.centerIn: parent
-                        visible: bridge.entries.length === 0
-                        text: bridge.loading ? "Cargando carpeta…" : (bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…")
+                        visible: window.filteredEntries.length === 0
+                        text: bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
                         color: GemaTheme.darkText ? "#263d50" : "#ffffff"
                     }
                 }
@@ -233,7 +305,7 @@ FloatingWindow {
         }
         Text {
             Layout.fillWidth: true
-            text: bridge.error ? bridge.error : (bridge.loading ? "Cargando…" : bridge.entries.length + " elementos" + (bridge.skipped ? " · " + bridge.skipped + (bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : ""))
+            text: bridge.error ? bridge.error : (bridge.loading ? "Cargando…" : window.filteredEntries.length + " elementos" + (search.text ? " de " + bridge.entries.length + " · búsqueda activa" : "") + (bridge.skipped ? " · " + bridge.skipped + (bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : ""))
             textFormat: Text.PlainText
             color: GemaTheme.darkText ? "#263d50" : "#ffffff"
             elide: Text.ElideRight
@@ -242,7 +314,7 @@ FloatingWindow {
     }
     Connections {
         target: bridge
-        function onListingSucceeded() { window.editingPath = false; pathField.text = bridge.path; listing.currentIndex = -1; grid.currentIndex = -1; }
+        function onListingSucceeded() { if (window.listedPath !== bridge.path) search.clear(); window.listedPath = bridge.path; window.editingPath = false; pathField.text = bridge.path; listing.currentIndex = -1; grid.currentIndex = -1; }
         function onErrorChanged() {
             if (bridge.error) {
                 window.editingPath = false;
@@ -255,6 +327,7 @@ FloatingWindow {
     Shortcut { sequence: "Alt+Left"; onActivated: bridge.back() }
     Shortcut { sequence: "Alt+Up"; onActivated: { if (bridge.parentPath && bridge.parentPath !== bridge.path) bridge.list(bridge.parentPath, bridge.showHidden, "navigate"); } }
     Shortcut { sequence: "Ctrl+L"; enabled: bridge.ready && !bridge.loading; onActivated: { pathField.text = bridge.path; window.editingPath = true; pathField.forceActiveFocus(); pathField.selectAll(); } }
+    Shortcut { sequence: "Ctrl+F"; onActivated: { search.forceActiveFocus(); search.selectAll(); } }
     Shortcut { sequence: "Ctrl+1"; onActivated: window.switchView(true) }
     Shortcut { sequence: "Ctrl+2"; onActivated: window.switchView(false) }
     Shortcut { sequence: "F5"; onActivated: { if (bridge.path) bridge.list(bridge.path, bridge.showHidden, "refresh"); } }
