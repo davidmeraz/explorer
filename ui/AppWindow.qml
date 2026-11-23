@@ -14,6 +14,28 @@ FloatingWindow {
     minimumSize: Qt.size(480, 360)
     color: "transparent"
     visible: true
+    property bool gridMode: true
+    property bool editingPath: false
+    readonly property alias gridView: grid
+    readonly property alias listView: listing
+    function switchView(useGrid) {
+        const selected = gridMode ? grid.currentIndex : listing.currentIndex;
+        gridMode = useGrid;
+        if (useGrid) { grid.currentIndex = selected; grid.forceActiveFocus(); }
+        else { listing.currentIndex = selected; listing.forceActiveFocus(); }
+    }
+    function fileLabel(name) {
+        const dot = name.lastIndexOf(".");
+        return dot > 0 ? name.slice(dot + 1, dot + 6).toUpperCase() : "FILE";
+    }
+    function fileColor(name) {
+        const ext = fileLabel(name);
+        if (["JS", "TS", "QML", "JSON"].includes(ext)) return "#f1ce70";
+        if (["RS", "C", "CPP", "H"].includes(ext)) return "#f39b83";
+        if (["PY", "SH", "RB"].includes(ext)) return "#83cba9";
+        if (["PNG", "JPG", "SVG", "WEBP"].includes(ext)) return "#d6a2ec";
+        return "#91bdf0";
+    }
     BackgroundEffect.blurRegion: Region { item: GemaTheme.blur ? surface : null; radius: surface.radius }
     function openEntry(entry) {
         if (!entry || bridge.loading) return;
@@ -63,13 +85,42 @@ FloatingWindow {
             TextField {
                 id: pathField
                 Layout.fillWidth: true
+                visible: window.editingPath
                 enabled: bridge.ready && !bridge.loading
                 selectByMouse: true
                 placeholderText: "Ruta absoluta"
                 text: bridge.path
                 color: GemaTheme.darkText ? "#263d50" : "#ffffff"
                 background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
-                onAccepted: bridge.list(text, bridge.showHidden, "navigate")
+                onAccepted: { const target = text; window.editingPath = false; bridge.list(target, bridge.showHidden, "navigate"); }
+                onActiveFocusChanged: if (!activeFocus && window.editingPath) { text = bridge.path; window.editingPath = false; }
+                Keys.onEscapePressed: { text = bridge.path; window.editingPath = false; }
+            }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                Layout.preferredHeight: 36
+                visible: !window.editingPath
+                contentWidth: crumbs.implicitWidth
+                contentHeight: availableHeight
+                Component.onCompleted: contentItem.contentX = Math.max(0, contentWidth - availableWidth)
+                onContentWidthChanged: contentItem.contentX = Math.max(0, contentWidth - availableWidth)
+                onAvailableWidthChanged: contentItem.contentX = Math.max(0, contentWidth - availableWidth)
+                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                Row {
+                    id: crumbs
+                    ActionButton { text: "/"; onClicked: bridge.list("/", bridge.showHidden, "navigate") }
+                    Repeater {
+                        model: bridge.path.split("/").filter(s => s.length > 0)
+                        ActionButton {
+                            required property string modelData
+                            required property int index
+                            text: "› " + modelData
+                            enabled: bridge.ready && !bridge.loading
+                            onClicked: bridge.list("/" + bridge.path.split("/").filter(s => s.length > 0).slice(0, index + 1).join("/"), bridge.showHidden, "navigate")
+                        }
+                    }
+                }
             }
             ActionButton { text: "↻"; ToolTip.visible: hovered; ToolTip.text: "Actualizar"; enabled: bridge.ready && !bridge.loading && bridge.path !== ""; onClicked: bridge.list(bridge.path, bridge.showHidden, "refresh") }
         }
@@ -77,6 +128,8 @@ FloatingWindow {
             Layout.fillWidth: true
             Text { text: "CONTENIDO"; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
             Item { Layout.fillWidth: true }
+            ActionButton { text: "Cuadrícula"; enabled: !window.gridMode; onClicked: window.switchView(true) }
+            ActionButton { text: "Lista"; enabled: window.gridMode; onClicked: window.switchView(false) }
             CheckBox {
                 id: hiddenCheck
                 text: "Mostrar ocultos"
@@ -97,6 +150,7 @@ FloatingWindow {
                 spacing: 2
                 RowLayout {
                     Layout.fillWidth: true
+                    visible: !window.gridMode
                     Text { text: "Nombre"; Layout.fillWidth: true; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 11 }
                     Text { text: "Tipo"; Layout.preferredWidth: 85; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 11 }
                     Text { text: "Tamaño"; Layout.preferredWidth: 75; horizontalAlignment: Text.AlignRight; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 11 }
@@ -105,6 +159,7 @@ FloatingWindow {
                     id: listing
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    visible: !window.gridMode
                     clip: true
                     focus: true
                     model: bridge.entries
@@ -138,6 +193,42 @@ FloatingWindow {
                         color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 14
                     }
                 }
+                GridView {
+                    id: grid
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: window.gridMode
+                    focus: window.gridMode
+                    clip: true
+                    cellWidth: 130
+                    cellHeight: 132
+                    model: bridge.entries
+                    currentIndex: -1
+                    ScrollBar.vertical: ScrollBar { }
+                    Keys.onReturnPressed: window.openEntry(bridge.entries[currentIndex])
+                    Keys.onEnterPressed: window.openEntry(bridge.entries[currentIndex])
+                    delegate: ExplorerIconCard {
+                        required property var modelData
+                        required property int index
+                        width: grid.cellWidth - 6
+                        height: grid.cellHeight - 6
+                        path: modelData.path
+                        name: modelData.name
+                        directory: modelData.isDir
+                        itemAccent: directory ? GemaTheme.accent : window.fileColor(name)
+                        langLabel: directory ? "" : window.fileLabel(name)
+                        focusPolicy: Qt.NoFocus
+                        selected: grid.currentIndex === index
+                        onClicked: { grid.currentIndex = index; grid.forceActiveFocus(); }
+                        onDoubleClicked: window.openEntry(modelData)
+                    }
+                    Text {
+                        anchors.centerIn: parent
+                        visible: bridge.entries.length === 0
+                        text: bridge.loading ? "Cargando carpeta…" : (bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…")
+                        color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+                    }
+                }
             }
         }
         Text {
@@ -151,9 +242,10 @@ FloatingWindow {
     }
     Connections {
         target: bridge
-        function onListingSucceeded() { pathField.text = bridge.path; listing.currentIndex = -1; }
+        function onListingSucceeded() { window.editingPath = false; pathField.text = bridge.path; listing.currentIndex = -1; grid.currentIndex = -1; }
         function onErrorChanged() {
             if (bridge.error) {
+                window.editingPath = false;
                 pathField.text = bridge.path;
                 hiddenCheck.checked = bridge.showHidden;
             }
@@ -162,6 +254,8 @@ FloatingWindow {
     }
     Shortcut { sequence: "Alt+Left"; onActivated: bridge.back() }
     Shortcut { sequence: "Alt+Up"; onActivated: { if (bridge.parentPath && bridge.parentPath !== bridge.path) bridge.list(bridge.parentPath, bridge.showHidden, "navigate"); } }
-    Shortcut { sequence: "Ctrl+L"; onActivated: { pathField.forceActiveFocus(); pathField.selectAll(); } }
+    Shortcut { sequence: "Ctrl+L"; enabled: bridge.ready && !bridge.loading; onActivated: { pathField.text = bridge.path; window.editingPath = true; pathField.forceActiveFocus(); pathField.selectAll(); } }
+    Shortcut { sequence: "Ctrl+1"; onActivated: window.switchView(true) }
+    Shortcut { sequence: "Ctrl+2"; onActivated: window.switchView(false) }
     Shortcut { sequence: "F5"; onActivated: { if (bridge.path) bridge.list(bridge.path, bridge.showHidden, "refresh"); } }
 }

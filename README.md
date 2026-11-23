@@ -20,6 +20,16 @@ Desde este directorio:
 
 El primer comando inicia la aplicación en la sesión gráfica; el segundo ejecuta `qmllint` de Qt 6, las pruebas Rust y un intercambio IPC real con el motor. `qmllint` puede emitir advertencias de tipos o importaciones; los errores causan fallo. Fuera de Arch se puede indicar el ejecutable Qt 6 con `QMLLINT=/ruta/a/qmllint ./scripts/check.sh`. Las pruebas no sustituyen la comprobación visual en una sesión Wayland.
 
+Con una sesión Wayland disponible, `quickshell -p card-smoke.qml` instancia la tarjeta real y comprueba su selección y cambio de tipo; debe aparecer `CARD_TEST_OK` en el registro.
+
+## Interfaz y procedencia
+
+Smoke opcional de la UI real en una sesión Wayland (requiere `qs`, el módulo QML `QtTest`, `timeout` y el backend compilable): `bash scripts/smoke-wayland.sh`. Usa HOME y configuración temporales con una carpeta y un archivo de prueba; comprueba los delegates, clic en lista, selección y foco al cambiar de vista y navegación con Enter, sin abrir archivos externos. Sale con error si falla la comprobación o vence el tiempo.
+
+La cuadrícula de tarjetas grandes es la vista inicial; los botones permiten cambiar a lista. Un clic selecciona, doble clic o Enter abre, y las migas permiten navegar a cualquier carpeta antecesora. Se conservan el historial, la edición de ruta, el refresco y la opción de mostrar ocultos. Los documentos muestran etiqueta y color según su extensión.
+
+El arte vectorial QML de carpetas de cristal y documentos doblados de `ui/components/ExplorerIconCard.qml` está adaptado de `ui/components/windows/ExplorerIconCard.qml` de Agent Shell. Las migas y los modos de vista se inspiran en `ui/components/windows/ProjectExplorerWindow.qml` del mismo proyecto; la integración y la paleta por extensión están adaptadas a Explorer y GemaTheme.
+
 ## Menú de aplicaciones (opcional)
 
 El vidrio sigue las preferencias Gema en `${XDG_CONFIG_HOME:-$HOME/.config}/gema/preferences.json`; opcionalmente `GEMA_SETTINGS_PATH` permite indicar otro archivo. Se usan las preferencias de acento, radio, blur y `darkText` sin modificar el archivo. La legibilidad y el desenfoque dependen también del compositor y del fondo.
@@ -54,5 +64,7 @@ Usa la ruta real del wrapper mostrada por el instalador; consulta la sintaxis de
 - `Alt+Izquierda`: volver.
 - `Alt+Arriba`: carpeta superior.
 - `Ctrl+L`: seleccionar la ruta para editarla.
+- `Ctrl+1`: cuadrícula de iconos grandes.
+- `Ctrl+2`: lista.
 - `F5`: actualizar la carpeta.
-- `Enter` en la lista: abrir la entrada seleccionada.
+- `Enter` en la cuadrícula o lista: abrir la entrada seleccionada; flechas para seleccionarla.

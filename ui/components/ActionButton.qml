@@ -11,6 +11,7 @@ Button {
     font.pixelSize: 13
     contentItem: Text {
         text: control.text
+        textFormat: Text.PlainText
         font: control.font
         color: GemaTheme.darkText ? "#263d50" : "#ffffff"
         opacity: control.enabled ? 1 : 0.55

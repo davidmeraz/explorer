@@ -1,5 +1,6 @@
 singleton GemaTheme 1.0 GemaTheme.qml
 ActionButton 1.0 ActionButton.qml
+ExplorerIconCard 1.0 ExplorerIconCard.qml
 GlassComboBox 1.0 GlassComboBox.qml
 GlassDialog 1.0 GlassDialog.qml
 GlassPanel 1.0 GlassPanel.qml
