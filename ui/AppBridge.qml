@@ -1,0 +1,74 @@
+import QtQuick
+import Quickshell
+import Quickshell.Io
+
+QtObject {
+    id: bridge
+    property bool ready: false
+    property string appName: "Explorer"
+    property string appVersion: "0.1.0"
+    property bool loading: false
+    property string error: ""
+    property string path: ""
+    property string parentPath: ""
+    property bool showHidden: false
+    property var entries: []
+    property int skipped: 0
+    signal listingSucceeded()
+    property var history: []
+    property string pendingMode: ""
+    function list(target, hidden, mode) {
+        if (!ready || loading) return;
+        loading = true;
+        error = "";
+        pendingMode = mode || "navigate";
+        backend.write(JSON.stringify({version: 2, type: "fs.list", data: {path: target, showHidden: hidden}}) + "\n");
+    }
+    function home() { list("", showHidden, "navigate"); }
+    function back() { if (history.length) list(history[history.length - 1], showHidden, "back"); }
+    function receive(line) {
+        let event;
+        try {
+            event = JSON.parse(line);
+            if (event.version !== 2 || !event.data || typeof event.type !== "string") throw new Error("Formato incompatible");
+        } catch (e) {
+            loading = false;
+            error = "Error de comunicación: " + e.message;
+            return;
+        }
+        const data = event.data;
+        if (event.type === "app.ready") {
+            ready = true;
+            appName = data.name || "Explorer";
+            appVersion = data.version || "0.1.0";
+            home();
+        } else if (event.type === "fs.listed" && loading) {
+            let items = (data.entries || []).filter(e => e && (e.isDir || e.isFile) && typeof e.path === "string");
+            if (pendingMode === "back") history = history.slice(0, -1);
+            else if (pendingMode === "navigate" && path && path !== data.path) history = history.concat([path]);
+            path = data.path;
+            parentPath = data.parent || "";
+            showHidden = data.showHidden;
+            entries = items;
+            skipped = data.skipped || 0;
+            loading = false;
+            listingSucceeded();
+        } else if (event.type === "error") {
+            loading = false;
+            error = data.message || "No se pudo abrir la carpeta.";
+        }
+    }
+    readonly property Process backend: Process {
+        command: [Quickshell.shellDir + "/backend/run-backend.sh"]
+        workingDirectory: Quickshell.shellDir
+        stdinEnabled: true
+        running: true
+        stdout: SplitParser { onRead: data => bridge.receive(data) }
+        stderr: SplitParser { onRead: data => console.warn("Backend: " + data) }
+        onExited: (exitCode, exitStatus) => {
+            bridge.ready = false;
+            bridge.loading = false;
+            bridge.error = "Motor desconectado (" + exitCode + ").";
+        }
+    }
+}
