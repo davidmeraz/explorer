@@ -23,7 +23,7 @@ exec_path=${exec_path//%/%%}
 {
     printf '[Desktop Entry]\nType=Application\nName=Explorer\n'
     printf 'Comment=Explorador de archivos\nExec="%s"\n' "$exec_path"
-    printf 'Terminal=false\nCategories=Utility;FileManager;\n'
+    printf 'Terminal=false\nCategories=Utility;FileManager;\nStartupWMClass=dev.gema.explorer\n'
 } > "$data_home/applications/explorer.desktop"
 echo "Instalado: $data_home/applications/explorer.desktop"
 echo "Lanzador: $wrapper"

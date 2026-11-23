@@ -68,6 +68,7 @@ Usa la ruta real del wrapper mostrada por el instalador; consulta la sintaxis de
 - `Ctrl+1`: cuadrícula de iconos grandes.
 - `Ctrl+2`: lista.
 
-Explorer solicita al arrancar la maximización que respeta las barras. En Hyprland con API Lua usa `hyprctl eval` únicamente sobre la ventana mapeada de este proceso con título «Explorer»; espera y reintenta brevemente si aún no está mapeada. Si es flotante, ajusta su geometría normal al área útil del monitor, teniendo en cuenta escala, rotación y reservas; «Restaurar» la centra con tamaño 900x620 limitado al área disponible. En mosaico utiliza la maximización nativa del compositor. En otros compositores o sin esa API recurre a la maximización nativa de Qt. No modifica la configuración del compositor. El smoke muestra las geometrías medidas al maximizar, restaurar y maximizar de nuevo.
 - `F5`: actualizar la carpeta.
 - `Enter` en la cuadrícula o lista: abrir la entrada seleccionada; flechas para seleccionarla.
+
+Explorer abre una ventana normal con identificador `dev.gema.explorer`: Hyprland decide su posición y tamaño en mosaico y la interfaz se adapta al espacio asignado. Las reglas del compositor o las acciones del usuario pueden hacerla flotante; Explorer no fuerza su geometría ni modifica la configuración del compositor. El smoke comprueba el mosaico y el tamaño asignado sin exigir que ocupe toda el área útil.

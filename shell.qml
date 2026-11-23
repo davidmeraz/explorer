@@ -1,3 +1,4 @@
+//@ pragma AppId dev.gema.explorer
 import Quickshell
 import "ui"
 

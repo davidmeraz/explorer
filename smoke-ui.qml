@@ -1,3 +1,4 @@
+//@ pragma AppId dev.gema.explorer
 import QtQuick
 import QtTest
 import Quickshell
@@ -6,13 +7,9 @@ import "ui"
 
 ShellRoot {
     id: root
-    property int phase: -3
+    property int phase: -1
     property int ticks: 0
-    property var monitors: []
     property var client: null
-    Process { id: monitorQuery; command: ["hyprctl", "-j", "monitors"]; running: true
-        stdout: StdioCollector { onStreamFinished: { try { root.monitors = JSON.parse(text); } catch (e) {} } }
-    }
     Process { id: clientQuery; command: ["hyprctl", "-j", "clients"]
         stdout: StdioCollector { onStreamFinished: {
             try { root.client = JSON.parse(text).find(c => c.pid === Quickshell.processId && c.title === "Explorer" && c.mapped) ?? null; }
@@ -32,21 +29,9 @@ ShellRoot {
                 if (root.ticks > 100) { console.error("SMOKE_ERROR: estado o geometría Hyprland no confirmados: fase=" + root.phase + " cliente=" + JSON.stringify(root.client)); Qt.quit(); return; }
                 if (!clientQuery.running) clientQuery.running = true;
                 const c = root.client;
-                const m = c && root.monitors.find(x => x.id === c.monitor);
-                if (!c || !m) return;
-                const r = m.reserved;
-                const rotated = m.transform % 2 === 1;
-                const width = Math.round((rotated ? m.height : m.width) / m.scale) - r[0] - r[2];
-                const height = Math.round((rotated ? m.width : m.height) / m.scale) - r[1] - r[3];
-                const x = m.x + r[0], y = m.y + r[1];
-                const rw = Math.min(900, width), rh = Math.min(620, height);
-                const matchesMax = (c.fullscreen === 0 || c.fullscreen === 1) && c.at[0] === x && c.at[1] === y && c.size[0] === width && c.size[1] === height;
-                const matchesRestore = c.fullscreen === 0 && c.at[0] === x + Math.floor((width - rw) / 2) && c.at[1] === y + Math.floor((height - rh) / 2) && c.size[0] === rw && c.size[1] === rh;
-                if ((root.phase === -2 ? matchesRestore : matchesMax)) {
-                    console.log("SMOKE_HYPRLAND: " + JSON.stringify({pid:c.pid, at:c.at, size:c.size, fullscreen:c.fullscreen}));
-                    root.client = null;
-                    if (root.phase === -1) root.phase = 0;
-                    else { ++root.phase; window.toggleFit(); }
+                if (c && c.floating === false && c.fullscreen === 0 && window.width === c.size[0] && window.height === c.size[1]) {
+                    console.log("SMOKE_HYPRLAND: " + JSON.stringify({pid:c.pid, class:c.class, floating:c.floating, fullscreen:c.fullscreen, size:c.size}));
+                    root.phase = 0;
                 }
                 return;
             }

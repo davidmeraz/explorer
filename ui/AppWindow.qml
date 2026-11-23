@@ -3,66 +3,14 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Wayland
-import Quickshell.Io
 import "components"
 
 FloatingWindow {
     id: window
     required property AppBridge bridge
     title: "Explorer"
-    property bool fitWorkArea: true
-    property int attempts: 0
-    property bool requestedFit: true
     implicitWidth: 900
     implicitHeight: 620
-    function applyFit() {
-        if (fitProcess.running) return;
-        requestedFit = fitWorkArea;
-        if (!Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE")) { maximized = fitWorkArea; return; }
-        const pid = Number(Quickshell.processId);
-        if (!Number.isInteger(pid) || pid <= 0) { maximized = fitWorkArea; return; }
-        fitProcess.command = ["hyprctl", "eval", `
-for _, w in ipairs(hl.get_windows()) do
-    if w.pid == ${pid} and w.title == "Explorer" and w.mapped then
-        if not w.floating then
-            hl.dispatch(hl.dsp.window.fullscreen({window=w, mode="maximized", action="${fitWorkArea ? "set" : "unset"}"}))
-            return
-        end
-        local m, r = w.monitor, w.monitor.reserved
-        local width, height = m.width, m.height
-        if m.transform % 2 == 1 then width, height = height, width end
-        width = math.floor(width / m.scale + 0.5) - r.left - r.right
-        height = math.floor(height / m.scale + 0.5) - r.top - r.bottom
-        local targetWidth = ${fitWorkArea ? "width" : "math.min(900, width)"}
-        local targetHeight = ${fitWorkArea ? "height" : "math.min(620, height)"}
-        local x = m.x + r.left + math.floor((width - targetWidth) / 2)
-        local y = m.y + r.top + math.floor((height - targetHeight) / 2)
-        hl.dispatch(hl.dsp.window.resize({window=w, x=targetWidth, y=targetHeight, relative=false}))
-        hl.dispatch(hl.dsp.window.move({window=w, x=x, y=y, relative=false}))
-        return
-    end
-end
-error("window not mapped")`];
-        fitProcess.running = true;
-    }
-    function toggleFit() {
-        fitWorkArea = !fitWorkArea;
-        attempts = 0;
-        retry.restart();
-    }
-    Timer { id: retry; interval: 150; onTriggered: window.applyFit() }
-    Process {
-        id: fitProcess
-        stderr: SplitParser { onRead: data => console.warn("Hyprland: " + data) }
-        onExited: (exitCode, exitStatus) => {
-            if (window.requestedFit !== window.fitWorkArea) { retry.restart(); return; }
-            if (exitCode !== 0) {
-                if (++window.attempts < 20) retry.restart();
-                else window.maximized = window.fitWorkArea;
-            }
-        }
-    }
-    Component.onCompleted: retry.start()
     minimumSize: Qt.size(480, 360)
     color: "transparent"
     visible: true
@@ -130,8 +78,7 @@ error("window not mapped")`];
                 Text { text: "Tus archivos, a mano  ·  v" + bridge.appVersion; font.pixelSize: 12; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
             }
             Item { Layout.fillWidth: true }
-            Text { text: bridge.loading ? "Cargando…" : "EXPLORADOR DE ARCHIVOS"; font.pixelSize: 10; font.letterSpacing: 1; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
-            ActionButton { text: window.fitWorkArea ? "Restaurar" : "Maximizar"; Accessible.name: text + " ventana"; onClicked: window.toggleFit() }
+            Text { visible: window.width >= 600; text: bridge.loading ? "Cargando…" : "EXPLORADOR DE ARCHIVOS"; font.pixelSize: 10; font.letterSpacing: 1; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
         }
         RowLayout {
             Layout.fillWidth: true
@@ -157,6 +104,7 @@ error("window not mapped")`];
             TextField {
                 id: pathField
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 visible: window.editingPath
                 enabled: bridge.ready && !bridge.loading
                 selectByMouse: true
@@ -198,7 +146,7 @@ error("window not mapped")`];
         }
         RowLayout {
             Layout.fillWidth: true
-            Text { text: "CONTENIDO"; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
+            Text { visible: window.width >= 600; text: "CONTENIDO"; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
             Item { Layout.fillWidth: true }
             ActionButton { text: "Cuadrícula"; enabled: !window.gridMode; onClicked: window.switchView(true) }
             ActionButton { text: "Lista"; enabled: window.gridMode; onClicked: window.switchView(false) }
@@ -252,7 +200,7 @@ error("window not mapped")`];
                             anchors.leftMargin: 8; anchors.rightMargin: 8
                             spacing: 8
                             Text { text: row.modelData.isDir ? "▰" : "▤"; font.pixelSize: 18; color: row.modelData.isDir ? GemaTheme.accent : (GemaTheme.darkText ? "#263d50" : "#ffffff") }
-                            Text { text: row.modelData.name; textFormat: Text.PlainText; Layout.fillWidth: true; elide: Text.ElideMiddle; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 13 }
+                            Text { text: row.modelData.name; textFormat: Text.PlainText; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideMiddle; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 13 }
                             Text { text: row.modelData.isDir ? "Carpeta" : "Archivo"; Layout.preferredWidth: 85; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 12 }
                             Text { text: row.modelData.isDir ? "—" : window.sizeText(row.modelData.size); Layout.preferredWidth: 75; horizontalAlignment: Text.AlignRight; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 12 }
                         }
@@ -305,6 +253,7 @@ error("window not mapped")`];
         }
         Text {
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             text: bridge.error ? bridge.error : (bridge.loading ? "Cargando…" : window.filteredEntries.length + " elementos" + (search.text ? " de " + bridge.entries.length + " · búsqueda activa" : "") + (bridge.skipped ? " · " + bridge.skipped + (bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : ""))
             textFormat: Text.PlainText
             color: GemaTheme.darkText ? "#263d50" : "#ffffff"
