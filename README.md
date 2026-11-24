@@ -22,11 +22,17 @@ y su lista `places` de nombre, ruta y tipo (`name`, `path`, `kind`).
 Operaciones v2: `fs.mkdir` (`parent`, `name`), `fs.rename` (`path`, `newName`),
 `fs.trash` (`path`), `fs.copy` y `fs.move` (`source`, `destDir`) responden
 `fs.mutated` con la acción y rutas afectadas. `fs.openTerminal` (`path`)
-responde `fs.terminalOpened`. Los errores responden `error` con `message`.
+responde `fs.terminalOpened`. `fs.stat` (`path`) responde `fs.statResult` con
+metadatos completos (tipo, tamaño, permisos, fechas, conteo de elementos en
+carpetas y destino de enlaces simbólicos). `fs.videoThumbs` (`generation`,
+`paths`) encola la extracción asíncrona de miniaturas y duración de vídeos,
+responde `fs.videoThumbsQueued` y emite eventos progresivos `fs.videoThumb`.
+Los errores responden `error` con `message`.
 
 Las operaciones CRUD permiten nueva carpeta, renombrar, enviar a la papelera
-Freedesktop XDG, copiar, cortar y pegar. El menú contextual ofrece también copiar
-la ruta y abrir una terminal aquí. `fs.copy` resuelve colisiones con sufijos
+Freedesktop XDG, copiar, cortar y pegar. El menú contextual in-window ofrece
+también copiar la ruta, abrir terminal aquí y abrir el diálogo de
+**Información / Propiedades**. `fs.copy` resuelve colisiones con sufijos
 `(copia)`; `fs.move` y `fs.rename` rechazan destinos existentes sin sobrescribir.
 Se evitan ciclos de carpetas; la papelera usa `$XDG_DATA_HOME/Trash` o
 `$HOME/.local/share/Trash`.
@@ -37,6 +43,7 @@ Se evitan ciclos de carpetas; la papelera usa `$XDG_DATA_HOME/Trash` o
 - `rust` (incluye Cargo), para compilar el motor al iniciarlo; la primera compilación puede necesitar acceso a las dependencias de Cargo.
 - `qt6-declarative` para Qt Quick y `/usr/lib/qt6/bin/qmllint`. El Quickshell instalado debe disponer de sus módulos Qt/Quickshell correspondientes.
 - `python` para la comprobación IPC y `bash` para los scripts. `desktop-file-utils` es opcional para validar el lanzador.
+- `ffmpeg` (opcional) para extraer miniaturas y duración de vídeos en caché bajo `${XDG_CACHE_HOME:-$HOME/.cache}/gema-explorer/video-thumbs/`.
 
 ## Inicio y pruebas
 
@@ -55,7 +62,7 @@ El motor se compila en modo release al iniciarse solo si falta el binario o hay 
 
 Smoke opcional de la UI real en una sesión Wayland (requiere `qs`, el módulo QML `QtTest`, `timeout` y el backend compilable): `bash scripts/smoke-wayland.sh`. Usa HOME y configuración temporales y aísla también `XDG_DATA_HOME` para la papelera temporal, con una carpeta y un archivo de prueba; comprueba los delegates, clic en lista, selección y foco al cambiar de vista y navegación con Enter, sin abrir archivos externos. Sale con error si falla la comprobación o vence el tiempo.
 
-La cuadrícula de tarjetas grandes es la vista inicial; los botones permiten cambiar a lista. Un clic selecciona, doble clic o Enter abre, y las migas permiten navegar a cualquier carpeta antecesora. El botón de edición o un clic en la barra de migas permite editar la ruta. Se conservan el historial, la edición de ruta, el refresco y la opción de mostrar ocultos. Los documentos muestran etiqueta y color según su extensión.
+La cuadrícula de tarjetas grandes es la vista inicial y un control segmentado permite alternar a lista. Un clic selecciona, doble clic o Enter abre, clic derecho abre el menú contextual y las migas integradas permiten navegar a cualquier carpeta antecesora o editar la ruta. Las imágenes muestran miniaturas asíncronas cacheadas y los vídeos muestran fotograma de vista previa con duración; **Ctrl+Scroll** ajusta el tamaño de tarjetas y filas en ambas vistas. Los documentos muestran etiqueta y color según su extensión, y **Ctrl+I** abre el diálogo modal de Información.
 
 El arte vectorial QML de carpetas de cristal y documentos doblados de `ui/components/ExplorerIconCard.qml` está adaptado de `ui/components/windows/ExplorerIconCard.qml` de Agent Shell. Las migas y los modos de vista se inspiran en `ui/components/windows/ProjectExplorerWindow.qml` del mismo proyecto; la integración y la paleta por extensión están adaptadas a Explorer y GemaTheme.
 
@@ -97,9 +104,10 @@ Usa la ruta real del wrapper mostrada por el instalador; consulta la sintaxis de
 - `Ctrl+F`: enfocar la búsqueda local por subcadena de nombre, sin distinguir mayúsculas. Escape o «Limpiar búsqueda» la vacían. Se conserva al refrescar o ante errores y se limpia al cambiar de carpeta correctamente; el contador indica coincidencias y total.
 - `Ctrl+1`: cuadrícula de iconos grandes.
 - `Ctrl+2`: lista.
+- `Ctrl+Scroll`, `Ctrl++` / `Ctrl+-` / `Ctrl+0`: ajustar o restablecer el tamaño de la vista.
+- `Ctrl+I` / `Alt+Enter`: ver información y propiedades del elemento seleccionado (o de la carpeta actual).
 - `Ctrl+Shift+N`: nueva carpeta; `F2`: renombrar; `Del`: papelera.
 - `Ctrl+C`, `Ctrl+X`, `Ctrl+V`: copiar, cortar y pegar.
-
 - `F5`: actualizar la carpeta.
 - `Enter` en la cuadrícula o lista: abrir la entrada seleccionada; flechas para seleccionarla.
 
