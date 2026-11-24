@@ -17,8 +17,11 @@ ShellRoot {
         } }
     }
     AppBridge { id: bridge }
-    AppWindow { id: window; bridge: bridge }
-    TestCase { id: input; when: false }
+    AppWindow {
+        id: window
+        bridge: bridge
+        TestCase { id: input; when: false }
+    }
     Timer {
         interval: 100; repeat: true; running: true
         onTriggered: {
@@ -31,11 +34,26 @@ ShellRoot {
                 const c = root.client;
                 if (c && c.floating === false && c.fullscreen === 0 && window.width === c.size[0] && window.height === c.size[1]) {
                     console.log("SMOKE_HYPRLAND: " + JSON.stringify({pid:c.pid, class:c.class, floating:c.floating, fullscreen:c.fullscreen, size:c.size}));
-                    root.phase = 0;
+                    root.phase = 7;
                 }
                 return;
             }
-            if (root.phase === 0) {
+            if (root.phase === 7) {
+                if (root.ticks < 10) return;
+                if (bridge.places.length < 2) { console.error("SMOKE_ERROR: lugares insuficientes"); Qt.quit(); return; }
+                if (bridge.entries.length < 3 || typeof bridge.entries[0].mtime !== "number") { console.error("SMOKE_ERROR: mtime ausente"); Qt.quit(); return; }
+                root.phase = 8;
+                bridge.setSort("name", true);
+            } else if (root.phase === 8) {
+                if (!bridge.sortDesc || bridge.sortBy !== "name" || bridge.entries.length < 3 || bridge.entries[0].name !== "segunda" || bridge.entries[2].name !== "otro.txt") {
+                    console.error("SMOKE_ERROR: orden descendente"); Qt.quit(); return;
+                }
+                root.phase = 9;
+                bridge.setSort("name", false);
+            } else if (root.phase === 9) {
+                if (bridge.sortDesc || bridge.sortBy !== "name") { console.error("SMOKE_ERROR: orden restaurado"); Qt.quit(); return; }
+                root.phase = 0;
+            } else if (root.phase === 0) {
                 if (root.ticks < 10) return;
                 if (bridge.entries.length !== 4 || !bridge.entries[0].isDir || !bridge.entries[2].isFile) {
                     console.error("SMOKE_ERROR: entradas inesperadas"); Qt.quit(); return;

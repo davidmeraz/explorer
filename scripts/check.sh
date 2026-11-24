@@ -8,18 +8,23 @@ command -v "$qmllint" >/dev/null || { echo 'Falta qmllint de Qt 6; define QMLLIN
 command -v python3 >/dev/null || { echo 'Falta python3.' >&2; exit 1; }
 "$qmllint" -i ui/components/qmldir shell.qml ui/*.qml ui/components/*.qml
 cargo test --locked --manifest-path backend/Cargo.toml
-response="$(printf '{"version":2,"type":"app.check"}\n{"type":"app.check"}\n{"version":2,"type":"fs.list","data":{"path":"/","showHidden":false}}\n' | "$app_root/backend/run-backend.sh")"
+response="$(printf '{"version":2,"type":"app.check"}\n{"type":"app.check"}\n{"version":2,"type":"fs.places"}\n{"version":2,"type":"fs.list","data":{"path":"/","showHidden":false,"sortBy":"mtime","sortDesc":true}}\n' | "$app_root/backend/run-backend.sh")"
 python3 -c 'import json, sys
 try:
     lines = sys.argv[1].rstrip("\n").split("\n")
-    assert len(lines) == 4
-    ready, event, error, listing = map(json.loads, lines)
+    assert len(lines) == 5
+    ready, event, error, places, listing = map(json.loads, lines)
     assert ready["version"] == 2 and ready["type"] == "app.ready"
     assert event["version"] == 2 and event["type"] == "app.checked"
     assert event["data"]["ok"] is True and event["data"]["engine"] == "rust"
     assert error["version"] == 2 and error["type"] == "error"
+    assert places["version"] == 2 and places["type"] == "fs.places"
+    assert isinstance(places["data"]["places"], list)
+    assert any(p["path"] == "/" for p in places["data"]["places"])
     assert listing["version"] == 2 and listing["type"] == "fs.listed"
     assert listing["data"]["path"] == "/" and isinstance(listing["data"]["skipped"], int)
+    assert listing["data"]["sortBy"] == "mtime" and listing["data"]["sortDesc"] is True
+    assert all(type(e["mtime"]) is int for e in listing["data"]["entries"])
 except (ValueError, KeyError, TypeError, AssertionError) as exc:
     sys.exit("Respuesta IPC inválida: " + str(exc))' "$response"
 echo "Explorer: QML, pruebas Rust e IPC verificados."

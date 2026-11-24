@@ -2,6 +2,23 @@
 
 Explorador de archivos para Wayland, con interfaz Quickshell/Qt Quick y motor Rust. Está orientado a Arch Linux y Hyprland; no instala asociaciones de archivos ni modifica la configuración del compositor.
 
+## Lugares y ordenación
+
+El panel lateral de lugares se muestra u oculta con **Ctrl+B**. Incluye Inicio,
+carpetas XDG configuradas en `user-dirs.dirs`, Papelera, Sistema y montajes bajo
+`/run/media/$USER` cuando existen. La lista puede ordenarse por Nombre, Fecha,
+Tamaño o Tipo, en sentido ascendente o descendente; los directorios siempre
+aparecen primero.
+
+## Protocolo del motor
+
+El motor usa JSON-Lines v2: cada línea es un objeto JSON con `version: 2` y
+`type`. `fs.list` acepta en `data` la ruta `path`, `showHidden`, `sortBy`
+(`name`, `mtime`, `size` o `type`) y `sortDesc`. Responde con `fs.listed`,
+incluyendo entradas con `mtime` en segundos Unix y los criterios aplicados.
+`fs.places` acepta `data` omitido, nulo o un objeto, y responde con `fs.places`
+y su lista `places` de nombre, ruta y tipo (`name`, `path`, `kind`).
+
 ## Requisitos en Arch
 
 - Una sesión Wayland (por ejemplo, Hyprland) y Quickshell disponible como `qs`. Quickshell puede instalarse desde AUR como `quickshell-git` o desde otra fuente compatible; no se presupone que esté en los repositorios oficiales habilitados.

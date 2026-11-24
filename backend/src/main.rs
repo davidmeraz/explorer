@@ -1,9 +1,11 @@
 //! Explorer JSON Lines v2 backend.
 use serde_json::{json, Value};
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 fn event(kind: &str, data: Value) -> Value {
     json!({"version": 2, "type": kind, "data": data})
@@ -61,6 +63,16 @@ fn list(data: &Value) -> Result<Value, String> {
         Some(Value::Bool(b)) => *b,
         _ => return Err("showHidden debe ser booleano".into()),
     };
+    let sort_by = match data.get("sortBy") {
+        None => "name",
+        Some(Value::String(s)) if ["name", "size", "mtime", "type"].contains(&s.as_str()) => s,
+        _ => return Err("sortBy debe ser name, size, mtime o type".into()),
+    };
+    let sort_desc = match data.get("sortDesc") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        _ => return Err("sortDesc debe ser booleano".into()),
+    };
     let path = if path.is_empty() {
         PathBuf::from(std::env::var_os("HOME").ok_or("HOME no está definido")?)
     } else {
@@ -116,30 +128,215 @@ fn list(data: &Value) -> Result<Value, String> {
             }
         };
         let sort_name: Vec<char> = name.to_lowercase().chars().collect();
+        let extension: Vec<char> = if !metadata.is_dir() {
+            name.rfind('.')
+                .filter(|&i| i > 0)
+                .map(|i| name[i + 1..].to_lowercase())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        }
+        .chars()
+        .collect();
+        let mtime = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs());
         entries.push((
             metadata.is_dir(),
             name,
             entry_path.to_owned(),
             metadata.len(),
             sort_name,
+            mtime,
+            extension,
         ));
     }
     entries.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| natural_cmp_chars(&a.4, &b.4))
-            .then_with(|| a.1.cmp(&b.1))
+        b.0.cmp(&a.0).then_with(|| {
+            let name_order = || natural_cmp_chars(&a.4, &b.4).then_with(|| a.1.cmp(&b.1));
+            if sort_by == "name" {
+                let order = name_order();
+                return if sort_desc { order.reverse() } else { order };
+            }
+            let primary = match sort_by {
+                "size" if !a.0 => a.3.cmp(&b.3),
+                "mtime" => a.5.cmp(&b.5),
+                "type" => natural_cmp_chars(&a.6, &b.6),
+                _ => Ordering::Equal,
+            };
+            (if sort_desc {
+                primary.reverse()
+            } else {
+                primary
+            })
+            .then_with(name_order)
+        })
     });
     let entries: Vec<Value> = entries
         .into_iter()
-        .map(|(is_dir, name, path, size, _)| {
+        .map(|(is_dir, name, path, size, _, mtime, _)| {
             json!({
-                "name": name, "path": path, "isDir": is_dir, "isFile": !is_dir, "size": size
+                "name": name, "path": path, "isDir": is_dir, "isFile": !is_dir, "size": size, "mtime": mtime
             })
         })
         .collect();
     Ok(
-        json!({"path": path_str, "parent": parent, "entries": entries, "showHidden": show_hidden, "skipped": skipped}),
+        json!({"path": path_str, "parent": parent, "entries": entries, "showHidden": show_hidden, "skipped": skipped, "sortBy": sort_by, "sortDesc": sort_desc}),
     )
+}
+
+fn places_with_env(
+    home: Option<&Path>,
+    config: Option<&Path>,
+    data: Option<&Path>,
+    media: Option<&Path>,
+) -> Value {
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    let mut add = |name: &str, path: &Path, kind: &str| {
+        if !path.is_absolute() {
+            return;
+        }
+        if let Ok(canonical) = fs::canonicalize(path) {
+            if canonical.is_dir() && canonical.to_str().is_some() && seen.insert(canonical.clone())
+            {
+                result.push(json!({"name": name, "path": canonical, "kind": kind}));
+            }
+        }
+    };
+    if let Some(home) = home {
+        add("Inicio", home, "home");
+        let config = config
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| home.join(".config"));
+        let mut dirs = HashMap::new();
+        if let Ok(contents) = fs::read_to_string(config.join("user-dirs.dirs")) {
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    let value = value.trim();
+                    if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+                        let mut decoded = String::new();
+                        let mut chars = value[1..value.len() - 1].chars().peekable();
+                        while let Some(c) = chars.next() {
+                            if c == '\\' && matches!(chars.peek(), Some('"' | '\\')) {
+                                decoded.push(chars.next().unwrap());
+                            } else {
+                                decoded.push(c);
+                            }
+                        }
+                        let path = if decoded == "$HOME" {
+                            home.to_path_buf()
+                        } else if let Some(rest) = decoded.strip_prefix("$HOME/") {
+                            home.join(rest)
+                        } else {
+                            PathBuf::from(decoded)
+                        };
+                        dirs.insert(key.trim().to_owned(), path);
+                    }
+                }
+            }
+        }
+        for (key, name, kind, en, es) in [
+            (
+                "XDG_DESKTOP_DIR",
+                "Escritorio",
+                "desktop",
+                "Desktop",
+                "Escritorio",
+            ),
+            (
+                "XDG_DOCUMENTS_DIR",
+                "Documentos",
+                "documents",
+                "Documents",
+                "Documentos",
+            ),
+            (
+                "XDG_DOWNLOAD_DIR",
+                "Descargas",
+                "downloads",
+                "Downloads",
+                "Descargas",
+            ),
+            (
+                "XDG_PICTURES_DIR",
+                "Imágenes",
+                "pictures",
+                "Pictures",
+                "Imágenes",
+            ),
+            ("XDG_MUSIC_DIR", "Música", "music", "Music", "Música"),
+            ("XDG_VIDEOS_DIR", "Vídeos", "videos", "Videos", "Vídeos"),
+        ] {
+            if let Some(path) = dirs.get(key) {
+                add(name, path, kind);
+            } else if let Some(path) = [home.join(en), home.join(es)].iter().find(|p| p.is_dir()) {
+                add(name, path, kind);
+            }
+        }
+        let data = data
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| home.join(".local/share"));
+        add("Papelera", &data.join("Trash/files"), "trash");
+    } else if let Some(data) = data {
+        add("Papelera", &data.join("Trash/files"), "trash");
+    }
+    add("Sistema", Path::new("/"), "root");
+    if let Some(media) = media {
+        if let Ok(items) = fs::read_dir(media) {
+            let mut items: Vec<_> = items
+                .flatten()
+                .filter_map(|item| {
+                    item.file_name()
+                        .into_string()
+                        .ok()
+                        .map(|name| (name, item.path()))
+                })
+                .collect();
+            items.sort_by(|a, b| {
+                natural_cmp_chars(
+                    &a.0.to_lowercase().chars().collect::<Vec<_>>(),
+                    &b.0.to_lowercase().chars().collect::<Vec<_>>(),
+                )
+                .then_with(|| a.0.cmp(&b.0))
+            });
+            for (name, path) in items {
+                add(&name, &path, "mount");
+            }
+        }
+    }
+    json!({"places": result})
+}
+
+fn places(data: &Value) -> Result<Value, String> {
+    if !data.is_null() && !data.is_object() {
+        return Err("data debe ser un objeto".into());
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let media = std::env::var("USER")
+        .ok()
+        .filter(|s| !s.is_empty() && s != "." && s != ".." && !s.contains('/'))
+        .map(|s| Path::new("/run/media").join(s));
+    Ok(places_with_env(
+        home.as_deref(),
+        config.as_deref(),
+        data.as_deref(),
+        media.as_deref(),
+    ))
 }
 
 fn handle(line: &str, ping_count: &mut u64) -> Value {
@@ -161,6 +358,10 @@ fn handle(line: &str, ping_count: &mut u64) -> Value {
             Some("fs.list") => Ok(event(
                 "fs.listed",
                 list(command.get("data").unwrap_or(&Value::Null))?,
+            )),
+            Some("fs.places") => Ok(event(
+                "fs.places",
+                places(command.get("data").unwrap_or(&Value::Null))?,
             )),
             _ => Err("Acción no reconocida por el motor Rust".into()),
         }
@@ -210,6 +411,173 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn sorting_and_validation() {
+        let temp = Temp::new();
+        fs::create_dir(temp.0.join("dir2")).unwrap();
+        fs::create_dir(temp.0.join("dir10")).unwrap();
+        fs::write(temp.0.join("a.z"), b"123").unwrap();
+        fs::write(temp.0.join("b.a"), b"1").unwrap();
+        let time = std::time::SystemTime::now();
+        fs::File::open(temp.0.join("a.z"))
+            .unwrap()
+            .set_modified(time - std::time::Duration::from_secs(10))
+            .unwrap();
+        fs::File::open(temp.0.join("b.a"))
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+        for (sort, asc, desc) in [
+            ("name", "a.z", "b.a"),
+            ("size", "b.a", "a.z"),
+            ("mtime", "a.z", "b.a"),
+            ("type", "b.a", "a.z"),
+        ] {
+            for (reverse, first) in [(false, asc), (true, desc)] {
+                let value = list(&json!({"path":temp.0,"sortBy":sort,"sortDesc":reverse})).unwrap();
+                assert_eq!(value["sortBy"], sort);
+                assert_eq!(value["sortDesc"], reverse);
+                let entries = value["entries"].as_array().unwrap();
+                assert!(
+                    entries[0]["isDir"].as_bool().unwrap()
+                        && entries[1]["isDir"].as_bool().unwrap()
+                );
+                assert_eq!(entries[2]["name"], first);
+                assert!(entries.iter().all(|e| e["mtime"].as_u64().is_some()));
+            }
+        }
+        for value in [json!("bad"), json!(3), json!(null)] {
+            assert_eq!(
+                list(&json!({"sortBy":value})).unwrap_err(),
+                "sortBy debe ser name, size, mtime o type"
+            );
+        }
+        for value in [json!("true"), json!(3), json!(null)] {
+            assert_eq!(
+                list(&json!({"sortDesc":value})).unwrap_err(),
+                "sortDesc debe ser booleano"
+            );
+        }
+    }
+
+    #[test]
+    fn hidden_extension_and_descending_directories() {
+        let temp = Temp::new();
+        for name in ["dir2", "dir10"] {
+            fs::create_dir(temp.0.join(name)).unwrap();
+        }
+        for name in [".bashrc", "a", "z.aaa"] {
+            fs::write(temp.0.join(name), b"x").unwrap();
+        }
+        let time = std::time::SystemTime::now();
+        for (name, offset) in [("dir2", 10), ("dir10", 0)] {
+            fs::File::open(temp.0.join(name))
+                .unwrap()
+                .set_modified(time - std::time::Duration::from_secs(offset))
+                .unwrap();
+        }
+        let value = list(&json!({"path": temp.0, "showHidden": true, "sortBy": "type"})).unwrap();
+        let names: Vec<_> = value["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["dir2", "dir10", ".bashrc", "a", "z.aaa"]);
+        for (sort, expected) in [
+            ("size", ["dir2", "dir10"]),
+            ("type", ["dir2", "dir10"]),
+            ("mtime", ["dir10", "dir2"]),
+        ] {
+            let value = list(
+                &json!({"path": temp.0, "showHidden": true, "sortBy": sort, "sortDesc": true}),
+            )
+            .unwrap();
+            let entries = value["entries"].as_array().unwrap();
+            assert_eq!(entries[0]["name"], expected[0]);
+            assert_eq!(entries[1]["name"], expected[1]);
+            assert!(
+                entries[0]["isDir"].as_bool().unwrap() && entries[1]["isDir"].as_bool().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn relative_configured_place_is_ignored() {
+        let temp = Temp::new();
+        let relative = format!(
+            "explorer-relative-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let existing = Temp(std::env::current_dir().unwrap().join(&relative));
+        fs::create_dir(&existing.0).unwrap();
+        fs::write(
+            temp.0.join("user-dirs.dirs"),
+            format!("XDG_DOWNLOAD_DIR=\"{relative}\"\n"),
+        )
+        .unwrap();
+        let value = places_with_env(Some(&temp.0), Some(&temp.0), None, None);
+        assert!(!value["places"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["kind"] == "downloads"));
+    }
+
+    #[test]
+    fn places_configuration_and_mounts() {
+        let temp = Temp::new();
+        let home = temp.0.join("home");
+        let config = temp.0.join("config");
+        let data = temp.0.join("data");
+        let media = temp.0.join("media");
+        for path in [
+            home.join("quoted\"dir"),
+            home.join("Documents"),
+            config.clone(),
+            data.join("Trash/files"),
+            media.join("disk10"),
+            media.join("disk2"),
+        ] {
+            fs::create_dir_all(path).unwrap();
+        }
+        fs::write(
+            config.join("user-dirs.dirs"),
+            "# comentario\nXDG_DESKTOP_DIR=\"$HOME\"\nXDG_DOWNLOAD_DIR=\"$HOME/quoted\\\"dir\"\n",
+        )
+        .unwrap();
+        let value = places_with_env(Some(&home), Some(&config), Some(&data), Some(&media));
+        let entries = value["places"].as_array().unwrap();
+        let kinds: Vec<_> = entries
+            .iter()
+            .map(|p| p["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "home",
+                "documents",
+                "downloads",
+                "trash",
+                "root",
+                "mount",
+                "mount"
+            ]
+        );
+        assert_eq!(
+            entries[2]["path"],
+            home.join("quoted\"dir").to_str().unwrap()
+        );
+        assert_eq!(entries[5]["name"], "disk2");
+        assert_eq!(entries[6]["name"], "disk10");
+        assert!(places(&json!([])).is_err());
+        assert_eq!(
+            handle(r#"{"version":2,"type":"fs.places"}"#, &mut 0)["type"],
+            "fs.places"
+        );
+    }
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {
