@@ -16,7 +16,8 @@ ComboBox {
     contentItem: Text {
         text: control.displayText
         font: control.font
-        color: control.enabled ? "#f5f5f5" : "#888888"
+        color: GemaTheme.darkText ? "#263d50" : "#f5f5f5"
+        opacity: control.enabled ? 1 : 0.55
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
     }
@@ -25,7 +26,8 @@ ComboBox {
         y: (control.height - height) / 2
         text: control.opensAbove ? "⌃" : "⌄"
         font.pixelSize: 18
-        color: control.enabled ? "#ffffff" : "#888888"
+        color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+        opacity: control.enabled ? 1 : 0.55
     }
     background: GlassPanel {
         implicitWidth: 180

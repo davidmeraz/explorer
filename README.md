@@ -20,13 +20,13 @@ Desde este directorio:
 
 El primer comando inicia la aplicación en la sesión gráfica; el segundo ejecuta `qmllint` de Qt 6, las pruebas Rust y un intercambio IPC real con el motor. `qmllint` puede emitir advertencias de tipos o importaciones; los errores causan fallo. Fuera de Arch se puede indicar el ejecutable Qt 6 con `QMLLINT=/ruta/a/qmllint ./scripts/check.sh`. Las pruebas no sustituyen la comprobación visual en una sesión Wayland.
 
-Con una sesión Wayland disponible, `quickshell -p card-smoke.qml` instancia la tarjeta real y comprueba su selección y cambio de tipo; debe aparecer `CARD_TEST_OK` en el registro.
+El motor se compila en modo release al iniciarse solo si falta el binario o hay cambios en el código Rust o en los manifiestos de Cargo.
 
 ## Interfaz y procedencia
 
 Smoke opcional de la UI real en una sesión Wayland (requiere `qs`, el módulo QML `QtTest`, `timeout` y el backend compilable): `bash scripts/smoke-wayland.sh`. Usa HOME y configuración temporales con una carpeta y un archivo de prueba; comprueba los delegates, clic en lista, selección y foco al cambiar de vista y navegación con Enter, sin abrir archivos externos. Sale con error si falla la comprobación o vence el tiempo.
 
-La cuadrícula de tarjetas grandes es la vista inicial; los botones permiten cambiar a lista. Un clic selecciona, doble clic o Enter abre, y las migas permiten navegar a cualquier carpeta antecesora. Se conservan el historial, la edición de ruta, el refresco y la opción de mostrar ocultos. Los documentos muestran etiqueta y color según su extensión.
+La cuadrícula de tarjetas grandes es la vista inicial; los botones permiten cambiar a lista. Un clic selecciona, doble clic o Enter abre, y las migas permiten navegar a cualquier carpeta antecesora. El botón de edición o un clic en la barra de migas permite editar la ruta. Se conservan el historial, la edición de ruta, el refresco y la opción de mostrar ocultos. Los documentos muestran etiqueta y color según su extensión.
 
 El arte vectorial QML de carpetas de cristal y documentos doblados de `ui/components/ExplorerIconCard.qml` está adaptado de `ui/components/windows/ExplorerIconCard.qml` de Agent Shell. Las migas y los modos de vista se inspiran en `ui/components/windows/ProjectExplorerWindow.qml` del mismo proyecto; la integración y la paleta por extensión están adaptadas a Explorer y GemaTheme.
 
@@ -62,6 +62,7 @@ Usa la ruta real del wrapper mostrada por el instalador; consulta la sintaxis de
 ## Atajos de la aplicación
 
 - `Alt+Izquierda`: volver.
+- `Alt+Derecha`: avanzar.
 - `Alt+Arriba`: carpeta superior.
 - `Ctrl+L`: seleccionar la ruta para editarla.
 - `Ctrl+F`: enfocar la búsqueda local por subcadena de nombre, sin distinguir mayúsculas. Escape o «Limpiar búsqueda» la vacían. Se conserva al refrescar o ante errores y se limpia al cambiar de carpeta correctamente; el contador indica coincidencias y total.

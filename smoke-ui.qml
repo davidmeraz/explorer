@@ -75,6 +75,21 @@ ShellRoot {
                 root.phase = 2;
                 bridge.back();
             } else if (root.phase === 2) {
+                if (bridge.path.endsWith("/segunda") || !bridge.canForward) {
+                    console.error("SMOKE_ERROR: historial Adelante tras Atrás"); Qt.quit(); return;
+                }
+                root.phase = 5;
+                bridge.forward();
+            } else if (root.phase === 5) {
+                if (!bridge.path.endsWith("/segunda") || bridge.canForward || !bridge.canBack) {
+                    console.error("SMOKE_ERROR: bridge.forward()"); Qt.quit(); return;
+                }
+                root.phase = 6;
+                bridge.back();
+            } else if (root.phase === 6) {
+                if (bridge.path.endsWith("/segunda") || !bridge.canForward) {
+                    console.error("SMOKE_ERROR: segundo Atrás"); Qt.quit(); return;
+                }
                 window.searchField.text = "SEGUNDA";
                 window.switchView(true);
                 window.gridView.currentIndex = 0;

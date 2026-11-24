@@ -24,8 +24,12 @@ QtObject {
         pendingMode = mode || "navigate";
         backend.write(JSON.stringify({version: 2, type: "fs.list", data: {path: target, showHidden: hidden}}) + "\n");
     }
+    property var forwardHistory: []
+    readonly property bool canBack: ready && !loading && history.length > 0
+    readonly property bool canForward: ready && !loading && forwardHistory.length > 0
     function home() { list("", showHidden, "navigate"); }
     function back() { if (history.length) list(history[history.length - 1], showHidden, "back"); }
+    function forward() { if (forwardHistory.length) list(forwardHistory[forwardHistory.length - 1], showHidden, "forward"); }
     function receive(line) {
         let event;
         try {
@@ -44,8 +48,17 @@ QtObject {
             home();
         } else if (event.type === "fs.listed" && loading) {
             let items = (data.entries || []).filter(e => e && (e.isDir || e.isFile) && typeof e.path === "string");
-            if (pendingMode === "back") history = history.slice(0, -1);
-            else if (pendingMode === "navigate" && path && path !== data.path) history = history.concat([path]);
+            const moved = path && path !== data.path;
+            if (pendingMode === "back") {
+                history = history.slice(0, -1);
+                if (moved) forwardHistory = forwardHistory.concat([path]);
+            } else if (pendingMode === "forward") {
+                forwardHistory = forwardHistory.slice(0, -1);
+                if (moved) history = history.concat([path]);
+            } else if (pendingMode === "navigate" && moved) {
+                history = history.concat([path]);
+                forwardHistory = [];
+            }
             path = data.path;
             parentPath = data.parent || "";
             showHidden = data.showHidden;

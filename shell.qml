@@ -4,10 +4,10 @@ import "ui"
 
 // Punto de entrada Gema UI Kit: conecta AppBridge con AppWindow.
 ShellRoot {
-    AppBridge { id: bridge }
+    AppBridge { id: appBridge }
 
     AppWindow {
-        bridge: bridge
+        bridge: appBridge
         onClosed: Qt.quit()
     }
 }

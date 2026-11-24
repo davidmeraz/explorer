@@ -11,7 +11,8 @@ Dialog {
     }
     header: Label {
         text: control.title
-        color: "#f5f5f5"
+        color: GemaTheme.darkText ? "#263d50" : "#f5f5f5"
+        opacity: control.enabled ? 1 : 0.55
         font.pixelSize: 20
         font.bold: true
         padding: 20

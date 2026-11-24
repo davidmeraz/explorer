@@ -231,13 +231,13 @@ ItemDelegate {
                 wrapMode: Text.WrapAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideRight
-                color: tile.selected || tile.hovered
-                       ? (GemaTheme.darkText ? "#263d50" : "#ffffff") : (GemaTheme.darkText ? "#263d50" : "#ffffff")
+                color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+                opacity: tile.selected || tile.hovered ? 1.0 : 0.90
                 font.pixelSize: 11
                 font.weight: tile.selected ? Font.DemiBold : (tile.directory ? Font.Medium : Font.Normal)
-                style: Text.Raised
+                style: GemaTheme.darkText ? Text.Normal : Text.Raised
                 styleColor: "#60000000"
-                Behavior on color { ColorAnimation { duration: 150 } }
+                Behavior on opacity { NumberAnimation { duration: GemaTheme.animations ? 150 : 0 } }
             }
         }
     }

@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -17,14 +18,14 @@ FloatingWindow {
     property bool gridMode: true
     property bool editingPath: false
     property string listedPath: ""
+    property string uiError: ""
     readonly property alias searchField: search
-    readonly property var filteredEntries: bridge.entries.filter(entry => entry.name.toLowerCase().includes(search.text.toLowerCase()))
-    onFilteredEntriesChanged: Qt.callLater(() => { listing.currentIndex = -1; grid.currentIndex = -1; })
+    readonly property var filteredEntries: window.bridge.entries.filter(entry => entry.name.toLowerCase().includes(search.text.toLowerCase()))
     readonly property alias gridView: grid
     readonly property alias listView: listing
     function switchView(useGrid) {
-        const selected = gridMode ? grid.currentIndex : listing.currentIndex;
-        gridMode = useGrid;
+        const selected = window.gridMode ? grid.currentIndex : listing.currentIndex;
+        window.gridMode = useGrid;
         if (useGrid) { grid.currentIndex = selected; grid.forceActiveFocus(); }
         else { listing.currentIndex = selected; listing.forceActiveFocus(); }
     }
@@ -33,7 +34,7 @@ FloatingWindow {
         return dot > 0 ? name.slice(dot + 1, dot + 6).toUpperCase() : "FILE";
     }
     function fileColor(name) {
-        const ext = fileLabel(name);
+        const ext = window.fileLabel(name);
         if (["JS", "TS", "QML", "JSON"].includes(ext)) return "#f1ce70";
         if (["RS", "C", "CPP", "H"].includes(ext)) return "#f39b83";
         if (["PY", "SH", "RB"].includes(ext)) return "#83cba9";
@@ -42,12 +43,19 @@ FloatingWindow {
     }
     BackgroundEffect.blurRegion: Region { item: GemaTheme.blur ? surface : null; radius: surface.radius }
     function openEntry(entry) {
-        if (!entry || bridge.loading) return;
-        if (entry.isDir) bridge.list(entry.path, bridge.showHidden, "navigate");
+        if (!entry || window.bridge.loading) return;
+        window.uiError = "";
+        if (entry.isDir) window.bridge.list(entry.path, window.bridge.showHidden, "navigate");
         else if (entry.isFile) {
             const url = "file://" + entry.path.split("/").map(s => encodeURIComponent(s)).join("/");
-            if (!Qt.openUrlExternally(url)) bridge.error = "No se pudo abrir el archivo.";
+            if (!Qt.openUrlExternally(url)) window.uiError = "No se pudo abrir el archivo.";
         }
+    }
+    function startEditPath() {
+        pathField.text = window.bridge.path;
+        window.editingPath = true;
+        pathField.forceActiveFocus();
+        pathField.selectAll();
     }
     function sizeText(bytes) {
         if (bytes < 1024) return bytes + " B";
@@ -75,10 +83,10 @@ FloatingWindow {
             ColumnLayout {
                 spacing: 1
                 Text { text: "Explorer"; font.pixelSize: 25; font.bold: true; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
-                Text { text: "Tus archivos, a mano  ·  v" + bridge.appVersion; font.pixelSize: 12; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
+                Text { text: "Tus archivos, a mano  ·  v" + window.bridge.appVersion; font.pixelSize: 12; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
             }
             Item { Layout.fillWidth: true }
-            Text { visible: window.width >= 600; text: bridge.loading ? "Cargando…" : "EXPLORADOR DE ARCHIVOS"; font.pixelSize: 10; font.letterSpacing: 1; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
+            Text { visible: window.width >= 600; text: window.bridge.loading ? "Cargando…" : "EXPLORADOR DE ARCHIVOS"; font.pixelSize: 10; font.letterSpacing: 1; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
         }
         RowLayout {
             Layout.fillWidth: true
@@ -91,58 +99,73 @@ FloatingWindow {
                 selectByMouse: true
                 color: GemaTheme.darkText ? "#263d50" : "#ffffff"
                 background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
-                Keys.onEscapePressed: (event) => { clear(); event.accepted = true; }
+                onTextChanged: window.uiError = ""
+                Keys.onEscapePressed: (event) => { search.clear(); event.accepted = true; }
             }
             ActionButton { text: "Limpiar búsqueda"; enabled: search.text.length > 0; onClicked: { search.clear(); search.forceActiveFocus(); } }
         }
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
-            ActionButton { text: "Atrás"; enabled: bridge.ready && !bridge.loading && bridge.history.length > 0; onClicked: bridge.back() }
-            ActionButton { text: "Inicio"; enabled: bridge.ready && !bridge.loading; onClicked: bridge.home() }
-            ActionButton { text: "↑"; ToolTip.visible: hovered; ToolTip.text: "Carpeta superior"; enabled: bridge.ready && !bridge.loading && bridge.parentPath !== "" && bridge.parentPath !== bridge.path; onClicked: bridge.list(bridge.parentPath, bridge.showHidden, "navigate") }
+            ActionButton { text: "Atrás"; enabled: window.bridge.canBack; onClicked: window.bridge.back() }
+            ActionButton { text: "Adelante"; enabled: window.bridge.canForward; onClicked: window.bridge.forward() }
+            ActionButton { text: "Inicio"; enabled: window.bridge.ready && !window.bridge.loading; onClicked: window.bridge.home() }
+            ActionButton { text: "↑"; ToolTip.visible: hovered; ToolTip.text: "Carpeta superior"; enabled: window.bridge.ready && !window.bridge.loading && window.bridge.parentPath !== "" && window.bridge.parentPath !== window.bridge.path; onClicked: window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate") }
             TextField {
                 id: pathField
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
                 visible: window.editingPath
-                enabled: bridge.ready && !bridge.loading
+                enabled: window.bridge.ready && !window.bridge.loading
                 selectByMouse: true
                 placeholderText: "Ruta absoluta"
-                text: bridge.path
+                text: window.bridge.path
                 color: GemaTheme.darkText ? "#263d50" : "#ffffff"
                 background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
-                onAccepted: { const target = text; window.editingPath = false; bridge.list(target, bridge.showHidden, "navigate"); }
-                onActiveFocusChanged: if (!activeFocus && window.editingPath) { text = bridge.path; window.editingPath = false; }
-                Keys.onEscapePressed: { text = bridge.path; window.editingPath = false; }
+                onAccepted: { const target = pathField.text; window.editingPath = false; window.bridge.list(target, window.bridge.showHidden, "navigate"); }
+                onActiveFocusChanged: if (!pathField.activeFocus && window.editingPath) { pathField.text = window.bridge.path; window.editingPath = false; }
+                Keys.onEscapePressed: { pathField.text = window.bridge.path; window.editingPath = false; }
             }
-            ScrollView {
+            Flickable {
+                id: crumbsFlickable
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
                 Layout.preferredHeight: 36
                 visible: !window.editingPath
-                contentWidth: crumbs.implicitWidth
-                contentHeight: availableHeight
-                Component.onCompleted: contentItem.contentX = Math.max(0, contentWidth - availableWidth)
-                onContentWidthChanged: contentItem.contentX = Math.max(0, contentWidth - availableWidth)
-                onAvailableWidthChanged: contentItem.contentX = Math.max(0, contentWidth - availableWidth)
-                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+                clip: true
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
+                contentWidth: Math.max(crumbs.implicitWidth, crumbsFlickable.width)
+                contentHeight: crumbsFlickable.height
+                function scrollToEnd() { crumbsFlickable.contentX = Math.max(0, crumbsFlickable.contentWidth - crumbsFlickable.width); }
+                Component.onCompleted: crumbsFlickable.scrollToEnd()
+                onContentWidthChanged: crumbsFlickable.scrollToEnd()
+                onWidthChanged: crumbsFlickable.scrollToEnd()
+                MouseArea {
+                    // Espacio vacío de la barra: clic para editar la ruta.
+                    width: crumbsFlickable.contentWidth
+                    height: crumbsFlickable.height
+                    enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""
+                    onClicked: window.startEditPath()
+                }
                 Row {
                     id: crumbs
-                    ActionButton { text: "/"; onClicked: bridge.list("/", bridge.showHidden, "navigate") }
+                    ActionButton { text: "/"; enabled: window.bridge.ready && !window.bridge.loading; onClicked: window.bridge.list("/", window.bridge.showHidden, "navigate") }
                     Repeater {
-                        model: bridge.path.split("/").filter(s => s.length > 0)
+                        model: window.bridge.path.split("/").filter(s => s.length > 0)
                         ActionButton {
+                            id: crumb
                             required property string modelData
                             required property int index
-                            text: "› " + modelData
-                            enabled: bridge.ready && !bridge.loading
-                            onClicked: bridge.list("/" + bridge.path.split("/").filter(s => s.length > 0).slice(0, index + 1).join("/"), bridge.showHidden, "navigate")
+                            text: "› " + crumb.modelData
+                            enabled: window.bridge.ready && !window.bridge.loading
+                            onClicked: window.bridge.list("/" + window.bridge.path.split("/").filter(s => s.length > 0).slice(0, crumb.index + 1).join("/"), window.bridge.showHidden, "navigate")
                         }
                     }
                 }
             }
-            ActionButton { text: "↻"; ToolTip.visible: hovered; ToolTip.text: "Actualizar"; enabled: bridge.ready && !bridge.loading && bridge.path !== ""; onClicked: bridge.list(bridge.path, bridge.showHidden, "refresh") }
+            ActionButton { text: "✎"; ToolTip.visible: hovered; ToolTip.text: "Editar ruta (Ctrl+L)"; enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""; onClicked: window.startEditPath() }
+            ActionButton { text: "↻"; ToolTip.visible: hovered; ToolTip.text: "Actualizar"; enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""; onClicked: window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh") }
         }
         RowLayout {
             Layout.fillWidth: true
@@ -153,9 +176,9 @@ FloatingWindow {
             CheckBox {
                 id: hiddenCheck
                 text: "Mostrar ocultos"
-                checked: bridge.showHidden
-                enabled: bridge.ready && !bridge.loading && bridge.path !== ""
-                onClicked: bridge.list(bridge.path, checked, "refresh")
+                checked: window.bridge.showHidden
+                enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""
+                onClicked: window.bridge.list(window.bridge.path, hiddenCheck.checked, "refresh")
                 contentItem: Text { text: hiddenCheck.text; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; verticalAlignment: Text.AlignVCenter; leftPadding: hiddenCheck.indicator.width + 6; font.pixelSize: 12 }
             }
         }
@@ -181,12 +204,13 @@ FloatingWindow {
                     Layout.fillHeight: true
                     visible: !window.gridMode
                     clip: true
-                    focus: true
+                    focus: !window.gridMode
                     model: window.filteredEntries
                     currentIndex: -1
+                    onModelChanged: listing.currentIndex = -1
                     ScrollBar.vertical: ScrollBar { }
-                    Keys.onReturnPressed: window.openEntry(window.filteredEntries[currentIndex])
-                    Keys.onEnterPressed: window.openEntry(window.filteredEntries[currentIndex])
+                    Keys.onReturnPressed: window.openEntry(window.filteredEntries[listing.currentIndex])
+                    Keys.onEnterPressed: window.openEntry(window.filteredEntries[listing.currentIndex])
                     delegate: Rectangle {
                         id: row
                         required property var modelData
@@ -194,7 +218,7 @@ FloatingWindow {
                         width: listing.width
                         height: 42
                         radius: 8
-                        color: listing.currentIndex === index ? GemaTheme.accentAlpha(0.30) : (mouse.containsMouse ? "#18ffffff" : "transparent")
+                        color: listing.currentIndex === row.index ? GemaTheme.accentAlpha(0.30) : (mouse.containsMouse ? "#18ffffff" : "transparent")
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 8; anchors.rightMargin: 8
@@ -209,7 +233,7 @@ FloatingWindow {
                     Text {
                         anchors.centerIn: parent
                         visible: window.filteredEntries.length === 0
-                        text: bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
+                        text: window.bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (window.bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
                         color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 14
                     }
                 }
@@ -220,32 +244,34 @@ FloatingWindow {
                     visible: window.gridMode
                     focus: window.gridMode
                     clip: true
-                    cellWidth: width / Math.max(1, Math.floor(width / 130))
+                    cellWidth: grid.width / Math.max(1, Math.floor(grid.width / 130))
                     cellHeight: 132
                     model: window.filteredEntries
                     currentIndex: -1
+                    onModelChanged: grid.currentIndex = -1
                     ScrollBar.vertical: ScrollBar { }
-                    Keys.onReturnPressed: window.openEntry(window.filteredEntries[currentIndex])
-                    Keys.onEnterPressed: window.openEntry(window.filteredEntries[currentIndex])
+                    Keys.onReturnPressed: window.openEntry(window.filteredEntries[grid.currentIndex])
+                    Keys.onEnterPressed: window.openEntry(window.filteredEntries[grid.currentIndex])
                     delegate: ExplorerIconCard {
+                        id: card
                         required property var modelData
                         required property int index
                         width: grid.cellWidth - 6
                         height: grid.cellHeight - 6
-                        path: modelData.path
-                        name: modelData.name
-                        directory: modelData.isDir
-                        itemAccent: directory ? GemaTheme.accent : window.fileColor(name)
-                        langLabel: directory ? "" : window.fileLabel(name)
+                        path: card.modelData.path
+                        name: card.modelData.name
+                        directory: card.modelData.isDir
+                        itemAccent: card.directory ? GemaTheme.accent : window.fileColor(card.name)
+                        langLabel: card.directory ? "" : window.fileLabel(card.name)
                         focusPolicy: Qt.NoFocus
-                        selected: grid.currentIndex === index
-                        onClicked: { grid.currentIndex = index; grid.forceActiveFocus(); }
-                        onDoubleClicked: window.openEntry(modelData)
+                        selected: grid.currentIndex === card.index
+                        onClicked: { grid.currentIndex = card.index; grid.forceActiveFocus(); }
+                        onDoubleClicked: window.openEntry(card.modelData)
                     }
                     Text {
                         anchors.centerIn: parent
                         visible: window.filteredEntries.length === 0
-                        text: bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
+                        text: window.bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (window.bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
                         color: GemaTheme.darkText ? "#263d50" : "#ffffff"
                     }
                 }
@@ -254,7 +280,7 @@ FloatingWindow {
         Text {
             Layout.fillWidth: true
             Layout.minimumWidth: 0
-            text: bridge.error ? bridge.error : (bridge.loading ? "Cargando…" : window.filteredEntries.length + " elementos" + (search.text ? " de " + bridge.entries.length + " · búsqueda activa" : "") + (bridge.skipped ? " · " + bridge.skipped + (bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : ""))
+            text: (window.bridge.error || window.uiError) ? (window.bridge.error || window.uiError) : (window.bridge.loading ? "Cargando…" : window.filteredEntries.length + " elementos" + (search.text ? " de " + window.bridge.entries.length + " · búsqueda activa" : "") + (window.bridge.skipped ? " · " + window.bridge.skipped + (window.bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : ""))
             textFormat: Text.PlainText
             color: GemaTheme.darkText ? "#263d50" : "#ffffff"
             elide: Text.ElideRight
@@ -262,22 +288,24 @@ FloatingWindow {
         }
     }
     Connections {
-        target: bridge
-        function onListingSucceeded() { if (window.listedPath !== bridge.path) search.clear(); window.listedPath = bridge.path; window.editingPath = false; pathField.text = bridge.path; listing.currentIndex = -1; grid.currentIndex = -1; }
+        target: window.bridge
+        function onListingSucceeded() { window.uiError = ""; if (window.listedPath !== window.bridge.path) search.clear(); window.listedPath = window.bridge.path; window.editingPath = false; pathField.text = window.bridge.path; listing.currentIndex = -1; grid.currentIndex = -1; crumbsFlickable.scrollToEnd(); }
         function onErrorChanged() {
-            if (bridge.error) {
+            if (window.bridge.error) {
+                window.uiError = "";
                 window.editingPath = false;
-                pathField.text = bridge.path;
-                hiddenCheck.checked = bridge.showHidden;
+                pathField.text = window.bridge.path;
+                hiddenCheck.checked = window.bridge.showHidden;
             }
         }
-        function onShowHiddenChanged() { hiddenCheck.checked = bridge.showHidden; }
+        function onShowHiddenChanged() { hiddenCheck.checked = window.bridge.showHidden; }
     }
-    Shortcut { sequence: "Alt+Left"; onActivated: bridge.back() }
-    Shortcut { sequence: "Alt+Up"; onActivated: { if (bridge.parentPath && bridge.parentPath !== bridge.path) bridge.list(bridge.parentPath, bridge.showHidden, "navigate"); } }
-    Shortcut { sequence: "Ctrl+L"; enabled: bridge.ready && !bridge.loading; onActivated: { pathField.text = bridge.path; window.editingPath = true; pathField.forceActiveFocus(); pathField.selectAll(); } }
+    Shortcut { sequence: "Alt+Left"; onActivated: window.bridge.back() }
+    Shortcut { sequence: "Alt+Right"; onActivated: window.bridge.forward() }
+    Shortcut { sequence: "Alt+Up"; onActivated: { if (window.bridge.parentPath && window.bridge.parentPath !== window.bridge.path) window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate"); } }
+    Shortcut { sequence: "Ctrl+L"; enabled: window.bridge.ready && !window.bridge.loading; onActivated: window.startEditPath() }
     Shortcut { sequence: "Ctrl+F"; onActivated: { search.forceActiveFocus(); search.selectAll(); } }
     Shortcut { sequence: "Ctrl+1"; onActivated: window.switchView(true) }
     Shortcut { sequence: "Ctrl+2"; onActivated: window.switchView(false) }
-    Shortcut { sequence: "F5"; onActivated: { if (bridge.path) bridge.list(bridge.path, bridge.showHidden, "refresh"); } }
+    Shortcut { sequence: "F5"; onActivated: { if (window.bridge.path) window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); } }
 }
