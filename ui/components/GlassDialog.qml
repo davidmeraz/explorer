@@ -6,21 +6,29 @@ import QtQuick.Controls
 Dialog {
     id: control
     modal: true
-    padding: 20
+    leftPadding: 22
+    rightPadding: 22
+    topPadding: 14
+    bottomPadding: 8
+
     background: MattePanel {
         overlay: true
         radius: 16
     }
+
     header: Label {
         text: control.title
-        color: GemaTheme.darkText ? "#263d50" : "#f5f5f5"
+        color: GemaTheme.textColor
         opacity: control.enabled ? 1 : 0.55
-        font.pixelSize: 20
-        font.bold: true
-        padding: 20
-        bottomPadding: 4
+        font.pixelSize: 18
+        font.weight: Font.DemiBold
+        leftPadding: 22
+        rightPadding: 22
+        topPadding: 20
+        bottomPadding: 2
         elide: Text.ElideRight
     }
+
     footer: DialogButtonBox {
         visible: control.standardButtons !== Dialog.NoButton
         standardButtons: control.standardButtons
@@ -29,5 +37,6 @@ Dialog {
         background: null
         delegate: ActionButton {}
     }
-    Overlay.modal: Rectangle { color: "#28000000" }
+
+    Overlay.modal: Rectangle { color: "#44080b12" }
 }

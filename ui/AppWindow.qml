@@ -10,17 +10,19 @@ FloatingWindow {
     id: window
     required property AppBridge bridge
     title: "Explorer"
-    implicitWidth: 900
-    implicitHeight: 620
+    implicitWidth: 960
+    implicitHeight: 640
     minimumSize: Qt.size(480, 360)
     color: "transparent"
     visible: true
+
     property bool gridMode: true
     property bool editingPath: false
     property string listedPath: ""
     property string uiError: ""
     readonly property alias searchField: search
     readonly property var filteredEntries: window.bridge.entries.filter(entry => entry.name.toLowerCase().includes(search.text.toLowerCase()))
+    readonly property var pathSegments: window.bridge.path.split("/").filter(s => s.length > 0)
     readonly property alias gridView: grid
     readonly property alias listView: listing
     readonly property alias placesView: placesList
@@ -31,11 +33,18 @@ FloatingWindow {
     property string clipboardMode: ""
     property string statusMessage: ""
     property var contextEntry: null
+
+    readonly property var currentEntry: {
+        const i = window.gridMode ? grid.currentIndex : listing.currentIndex;
+        return i >= 0 && i < window.filteredEntries.length ? window.filteredEntries[i] : null;
+    }
     readonly property bool modalOpen: mkdirDialog.visible || renameDialog.visible || trashDialog.visible
     readonly property bool textInputFocused: search.activeFocus || pathField.activeFocus || mkdirInput.activeFocus || renameInput.activeFocus
     readonly property bool canMutate: window.bridge.ready && !window.bridge.busy && !window.textInputFocused && !window.modalOpen
+
     Timer { id: statusTimer; interval: 3200; onTriggered: window.statusMessage = "" }
     TextEdit { id: clipboardText; visible: false }
+
     function showStatus(msg) {
         window.statusMessage = msg;
         statusTimer.restart();
@@ -44,11 +53,10 @@ FloatingWindow {
         clipboardText.text = p;
         clipboardText.selectAll();
         clipboardText.copy();
-        window.showStatus("Ruta copiada");
+        window.showStatus("Ruta copiada al portapapeles");
     }
     function selectedEntry() {
-        const i = window.gridMode ? grid.currentIndex : listing.currentIndex;
-        return i >= 0 && i < window.filteredEntries.length ? window.filteredEntries[i] : null;
+        return window.currentEntry;
     }
     function setClipboard(entry, mode) {
         if (!entry) return;
@@ -56,6 +64,11 @@ FloatingWindow {
         window.clipboardName = entry.name;
         window.clipboardMode = mode;
         window.showStatus(mode === "cut" ? "Cortado: " + entry.name : "Copiado: " + entry.name);
+    }
+    function clearClipboard() {
+        window.clipboardPath = "";
+        window.clipboardName = "";
+        window.clipboardMode = "";
     }
     function pasteClipboard() {
         if (window.clipboardPath === "" || window.bridge.path === "") return;
@@ -85,25 +98,33 @@ FloatingWindow {
         if (entry) entryMenu.popup(targetItem, x, y);
         else folderMenu.popup(targetItem, x, y);
     }
-    component GlassMenuItem: MenuItem {
-        id: glassItem
-        implicitWidth: 210
-        implicitHeight: 34
-        contentItem: Text {
-            text: glassItem.text
-            textFormat: Text.PlainText
-            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-            opacity: glassItem.enabled ? 1 : 0.5
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: 8
-            font.pixelSize: 13
-        }
-        background: Rectangle { radius: 8; color: glassItem.highlighted ? GemaTheme.accentAlpha(0.28) : "transparent" }
+    function toggleSort(columnKey) {
+        if (!window.bridge.ready || window.bridge.busy || window.bridge.path === "") return;
+        const nextDesc = window.bridge.sortBy === columnKey ? !window.bridge.sortDesc : false;
+        window.bridge.setSort(columnKey, nextDesc);
     }
+
     onWidthChanged: { if (!window.sidebarManual) window.sidebarOpen = window.width >= 680; }
+
     function placeIcon(kind) {
-        const icons = {home: "⌂", desktop: "◫", documents: "▤", downloads: "↓", pictures: "◩", music: "♪", videos: "▷", trash: "⌫", root: "/", mount: "⛁"};
-        return icons[kind] || "▰";
+        const icons = {
+            home: "home",
+            desktop: "desktop",
+            documents: "documents",
+            downloads: "downloads",
+            pictures: "pictures",
+            music: "music",
+            videos: "videos",
+            trash: "trash",
+            root: "root",
+            mount: "mount"
+        };
+        return icons[kind] || "folder";
+    }
+    function placeGroup(kind) {
+        if (kind === "mount") return 2;
+        if (kind === "trash" || kind === "root") return 1;
+        return 0;
     }
     function dateText(epochSec) {
         if (!epochSec || epochSec <= 0) return "—";
@@ -121,15 +142,26 @@ FloatingWindow {
         const dot = name.lastIndexOf(".");
         return dot > 0 ? name.slice(dot + 1, dot + 6).toUpperCase() : "FILE";
     }
+    function fileIcon(name) {
+        const ext = window.fileLabel(name);
+        if (["JS", "TS", "QML", "JSON", "RS", "C", "CPP", "H", "PY", "SH", "RB", "GO", "TOML", "YAML", "YML", "HTML", "CSS"].includes(ext)) return "code";
+        if (["PNG", "JPG", "JPEG", "SVG", "WEBP", "GIF", "BMP", "ICO"].includes(ext)) return "pictures";
+        if (["MP3", "FLAC", "WAV", "OGG", "OPUS", "M4A"].includes(ext)) return "music";
+        if (["MP4", "MKV", "WEBM", "AVI", "MOV"].includes(ext)) return "videos";
+        if (["ZIP", "TAR", "GZ", "XZ", "7Z", "ZST", "DEB", "RPM"].includes(ext)) return "box";
+        if (["MD", "TXT", "PDF", "DOC", "DOCX", "LOG"].includes(ext)) return "documents";
+        return "file";
+    }
     function fileColor(name) {
         const ext = window.fileLabel(name);
         if (["JS", "TS", "QML", "JSON"].includes(ext)) return "#f1ce70";
         if (["RS", "C", "CPP", "H"].includes(ext)) return "#f39b83";
-        if (["PY", "SH", "RB"].includes(ext)) return "#83cba9";
-        if (["PNG", "JPG", "SVG", "WEBP"].includes(ext)) return "#d6a2ec";
+        if (["PY", "SH", "RB", "GO"].includes(ext)) return "#83cba9";
+        if (["PNG", "JPG", "JPEG", "SVG", "WEBP", "GIF"].includes(ext)) return "#d6a2ec";
+        if (["MP3", "FLAC", "WAV", "OGG", "MP4", "MKV", "WEBM"].includes(ext)) return "#f0a6ca";
+        if (["ZIP", "TAR", "GZ", "XZ", "7Z", "ZST"].includes(ext)) return "#e8b474";
         return "#91bdf0";
     }
-    BackgroundEffect.blurRegion: Region { item: GemaTheme.blur ? surface : null; radius: surface.radius }
     function openEntry(entry) {
         if (!entry || window.bridge.busy) return;
         window.uiError = "";
@@ -148,216 +180,989 @@ FloatingWindow {
     function sizeText(bytes) {
         if (bytes < 1024) return bytes + " B";
         let value = bytes / 1024;
-        let units = ["KiB", "MiB", "GiB", "TiB"];
+        const units = ["KiB", "MiB", "GiB", "TiB"];
         let i = 0;
         while (value >= 1024 && i < units.length - 1) { value /= 1024; ++i; }
         return value.toFixed(1) + " " + units[i];
     }
+
+    component GlassMenuItem: MenuItem {
+        id: glassItem
+        property string iconName: ""
+        property string shortcutHint: ""
+        property bool destructive: false
+        implicitWidth: 224
+        implicitHeight: 34
+        leftPadding: 10
+        rightPadding: 10
+
+        contentItem: RowLayout {
+            spacing: 9
+            GlassIcon {
+                visible: glassItem.iconName.length > 0
+                name: glassItem.iconName
+                size: 14
+                color: glassItem.destructive ? GemaTheme.dangerColor : (glassItem.highlighted ? GemaTheme.accent : GemaTheme.mutedColor)
+                opacity: glassItem.enabled ? 1.0 : 0.4
+                Layout.alignment: Qt.AlignVCenter
+            }
+            Text {
+                Layout.fillWidth: true
+                text: glassItem.text
+                textFormat: Text.PlainText
+                color: glassItem.destructive ? GemaTheme.dangerColor : GemaTheme.textColor
+                opacity: glassItem.enabled ? 1.0 : 0.45
+                verticalAlignment: Text.AlignVCenter
+                font.pixelSize: 13
+                font.weight: glassItem.highlighted ? Font.Medium : Font.Normal
+                elide: Text.ElideRight
+            }
+            Text {
+                visible: glassItem.shortcutHint.length > 0
+                text: glassItem.shortcutHint
+                textFormat: Text.PlainText
+                color: GemaTheme.subtleColor
+                opacity: glassItem.enabled ? 0.85 : 0.35
+                font.pixelSize: 11
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+        background: Rectangle {
+            radius: 8
+            color: glassItem.highlighted
+                   ? (glassItem.destructive ? "#34f38ba8" : GemaTheme.accentAlpha(0.28))
+                   : "transparent"
+        }
+    }
+
+    component GlassMenuSeparator: MenuSeparator {
+        padding: 4
+        contentItem: Rectangle {
+            implicitHeight: 1
+            color: "#22ffffff"
+        }
+    }
+
+    component EmptyState: Item {
+        id: emptyRoot
+        anchors.fill: parent
+        property bool searching: search.text.length > 0
+        ColumnLayout {
+            anchors.centerIn: parent
+            spacing: 10
+            GlassPanel {
+                Layout.alignment: Qt.AlignHCenter
+                implicitWidth: 52
+                implicitHeight: 52
+                radius: 26
+                topColor: GemaTheme.accentAlpha(0.16)
+                bottomColor: "#140a0e18"
+                edgeColor: GemaTheme.accentAlpha(0.36)
+                GlassIcon {
+                    anchors.centerIn: parent
+                    name: window.bridge.loading ? "refresh" : (emptyRoot.searching ? "search" : "folder-open")
+                    size: 22
+                    color: GemaTheme.accent
+                }
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: window.bridge.loading
+                      ? "Cargando carpeta…"
+                      : (emptyRoot.searching
+                         ? "Sin coincidencias para «" + search.text + "»"
+                         : (window.bridge.path ? "Esta carpeta está vacía" : "Conectando con el motor…"))
+                textFormat: Text.PlainText
+                color: GemaTheme.textColor
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                visible: !window.bridge.loading && window.bridge.path.length > 0
+                text: emptyRoot.searching
+                      ? "Prueba con otro término o limpia el filtro."
+                      : "Usa Nueva carpeta (Ctrl+Shift+N) o pega elementos aquí."
+                textFormat: Text.PlainText
+                color: GemaTheme.subtleColor
+                font.pixelSize: 12
+            }
+            ActionButton {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.topMargin: 2
+                visible: emptyRoot.searching && !window.bridge.loading
+                iconName: "x"
+                text: "Limpiar búsqueda"
+                accent: true
+                onClicked: { search.clear(); search.forceActiveFocus(); }
+            }
+        }
+    }
+
+    BackgroundEffect.blurRegion: Region { item: GemaTheme.blur ? surface : null; radius: surface.radius }
+
     MattePanel {
         id: surface
         anchors.fill: parent
         anchors.margins: 1
         radius: GemaTheme.rounding
         topColor: "#18ffffff"
-        bottomColor: "#10ffffff"
-        edgeColor: "#48ffffff"
+        bottomColor: "#0effffff"
+        edgeColor: "#46ffffff"
     }
+
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 20
-        spacing: 12
+        anchors.leftMargin: 16
+        anchors.rightMargin: 16
+        anchors.topMargin: 14
+        anchors.bottomMargin: 12
+        spacing: 10
+
+        // === BARRA SUPERIOR UNIFICADA: MARCA + NAVEGACIÓN + RUTA + BÚSQUEDA ===
         RowLayout {
             Layout.fillWidth: true
-            ColumnLayout {
-                spacing: 1
-                Text { text: "Explorer"; font.pixelSize: 25; font.bold: true; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
-                Text { text: "Tus archivos, a mano  ·  v" + window.bridge.appVersion; font.pixelSize: 12; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
-            }
-            Item { Layout.fillWidth: true }
-            Text { visible: window.width >= 600; text: window.bridge.loading ? "Cargando…" : "EXPLORADOR DE ARCHIVOS"; font.pixelSize: 10; font.letterSpacing: 1; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            TextField {
-                id: search
-                Layout.fillWidth: true
-                Layout.minimumWidth: 0
-                placeholderText: "Buscar por nombre en esta carpeta (Ctrl+F)"
-                Accessible.name: "Buscar por nombre en esta carpeta"
-                selectByMouse: true
-                color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-                background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
-                onTextChanged: window.uiError = ""
-                Keys.onEscapePressed: (event) => { search.clear(); event.accepted = true; }
-            }
-            ActionButton { text: "Limpiar búsqueda"; enabled: search.text.length > 0; onClicked: { search.clear(); search.forceActiveFocus(); } }
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-            ActionButton { id: sidebarBtn; text: "☰"; ToolTip.visible: sidebarBtn.hovered; ToolTip.text: "Lugares (Ctrl+B)"; onClicked: { window.sidebarManual = true; window.sidebarOpen = !window.sidebarOpen; } }
-            ActionButton { text: "Atrás"; enabled: window.bridge.canBack; onClicked: window.bridge.back() }
-            ActionButton { text: "Adelante"; enabled: window.bridge.canForward; onClicked: window.bridge.forward() }
-            ActionButton { text: "Inicio"; enabled: window.bridge.ready && !window.bridge.busy; onClicked: window.bridge.home() }
-            ActionButton { id: upBtn; text: "↑"; ToolTip.visible: upBtn.hovered; ToolTip.text: "Carpeta superior"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.parentPath !== "" && window.bridge.parentPath !== window.bridge.path; onClicked: window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate") }
-            TextField {
-                id: pathField
-                Layout.fillWidth: true
-                Layout.minimumWidth: 0
-                visible: window.editingPath
-                enabled: window.bridge.ready && !window.bridge.busy
-                selectByMouse: true
-                placeholderText: "Ruta absoluta"
-                text: window.bridge.path
-                color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-                background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
-                onAccepted: { const target = pathField.text; window.editingPath = false; window.bridge.list(target, window.bridge.showHidden, "navigate"); }
-                onActiveFocusChanged: if (!pathField.activeFocus && window.editingPath) { pathField.text = window.bridge.path; window.editingPath = false; }
-                Keys.onEscapePressed: { pathField.text = window.bridge.path; window.editingPath = false; }
-            }
-            Flickable {
-                id: crumbsFlickable
-                Layout.fillWidth: true
-                Layout.minimumWidth: 0
-                Layout.preferredHeight: 36
-                visible: !window.editingPath
-                clip: true
-                flickableDirection: Flickable.HorizontalFlick
-                boundsBehavior: Flickable.StopAtBounds
-                contentWidth: Math.max(crumbs.implicitWidth, crumbsFlickable.width)
-                contentHeight: crumbsFlickable.height
-                function scrollToEnd() { crumbsFlickable.contentX = Math.max(0, crumbsFlickable.contentWidth - crumbsFlickable.width); }
-                Component.onCompleted: crumbsFlickable.scrollToEnd()
-                onContentWidthChanged: crumbsFlickable.scrollToEnd()
-                onWidthChanged: crumbsFlickable.scrollToEnd()
-                MouseArea {
-                    // Espacio vacío de la barra: clic para editar la ruta.
-                    width: crumbsFlickable.contentWidth
-                    height: crumbsFlickable.height
-                    enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
-                    onClicked: window.startEditPath()
+            spacing: 8
+
+            // Identidad compacta de la app.
+            RowLayout {
+                spacing: 8
+                GlassPanel {
+                    implicitWidth: 32
+                    implicitHeight: 32
+                    radius: GemaTheme.controlRadius
+                    topColor: GemaTheme.accentAlpha(0.28)
+                    bottomColor: GemaTheme.accentAlpha(0.12)
+                    edgeColor: GemaTheme.accentAlpha(0.62)
+                    GlassIcon {
+                        anchors.centerIn: parent
+                        name: "folder"
+                        size: 16
+                        color: GemaTheme.darkText ? GemaTheme.accentInk : "#ffffff"
+                    }
                 }
-                Row {
-                    id: crumbs
-                    ActionButton { text: "/"; enabled: window.bridge.ready && !window.bridge.busy; onClicked: window.bridge.list("/", window.bridge.showHidden, "navigate") }
-                    Repeater {
-                        model: window.bridge.path.split("/").filter(s => s.length > 0)
-                        ActionButton {
-                            id: crumb
-                            required property string modelData
-                            required property int index
-                            text: "› " + crumb.modelData
-                            enabled: window.bridge.ready && !window.bridge.busy
-                            onClicked: window.bridge.list("/" + window.bridge.path.split("/").filter(s => s.length > 0).slice(0, crumb.index + 1).join("/"), window.bridge.showHidden, "navigate")
-                        }
+                Text {
+                    visible: window.width >= 680
+                    text: "Explorer"
+                    color: GemaTheme.textColor
+                    font.pixelSize: 16
+                    font.weight: Font.Bold
+                    font.letterSpacing: -0.2
+                    style: GemaTheme.darkText ? Text.Normal : Text.Raised
+                    styleColor: "#50000000"
+                }
+                Rectangle {
+                    visible: window.width >= 960
+                    implicitWidth: verText.implicitWidth + 12
+                    implicitHeight: 20
+                    radius: 10
+                    color: GemaTheme.accentAlpha(0.16)
+                    border.width: 1
+                    border.color: GemaTheme.accentAlpha(0.32)
+                    Text {
+                        id: verText
+                        anchors.centerIn: parent
+                        text: "v" + window.bridge.appVersion
+                        color: GemaTheme.accent
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
                     }
                 }
             }
-            ActionButton { id: editBtn; text: "✎"; ToolTip.visible: editBtn.hovered; ToolTip.text: "Editar ruta (Ctrl+L)"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: window.startEditPath() }
-            ActionButton { id: refreshBtn; text: "↻"; ToolTip.visible: refreshBtn.hovered; ToolTip.text: "Actualizar"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } }
-            ActionButton { id: newFolderBtn; text: "+"; horizontalPadding: 10; ToolTip.visible: newFolderBtn.hovered; ToolTip.text: "Nueva carpeta (Ctrl+Shift+N)"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: window.openMkdirDialog() }
-            ActionButton { id: termBtn; text: ">_"; horizontalPadding: 10; ToolTip.visible: termBtn.hovered; ToolTip.text: "Abrir terminal aquí"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: window.bridge.openTerminal(window.bridge.path) }
+
+            Rectangle {
+                visible: window.width >= 680
+                implicitWidth: 1
+                implicitHeight: 20
+                color: "#24ffffff"
+            }
+
+            // Controles de navegación con iconografía unificada.
+            RowLayout {
+                spacing: 4
+                ActionButton {
+                    id: sidebarBtn
+                    iconName: "sidebar"
+                    ghost: !window.sidebarOpen
+                    implicitWidth: 34
+                    implicitHeight: 34
+                    toolTipText: window.sidebarOpen ? "Ocultar lugares (Ctrl+B)" : "Mostrar lugares (Ctrl+B)"
+                    onClicked: { window.sidebarManual = true; window.sidebarOpen = !window.sidebarOpen; }
+                }
+                ActionButton {
+                    id: backBtn
+                    iconName: "arrow-left"
+                    ghost: true
+                    implicitWidth: 32
+                    implicitHeight: 34
+                    enabled: window.bridge.canBack
+                    toolTipText: "Atrás (Alt+←)"
+                    onClicked: window.bridge.back()
+                }
+                ActionButton {
+                    id: forwardBtn
+                    iconName: "arrow-right"
+                    ghost: true
+                    implicitWidth: 32
+                    implicitHeight: 34
+                    enabled: window.bridge.canForward
+                    toolTipText: "Adelante (Alt+→)"
+                    onClicked: window.bridge.forward()
+                }
+                ActionButton {
+                    id: upBtn
+                    iconName: "arrow-up"
+                    ghost: true
+                    implicitWidth: 32
+                    implicitHeight: 34
+                    enabled: window.bridge.ready && !window.bridge.busy && window.bridge.parentPath !== "" && window.bridge.parentPath !== window.bridge.path
+                    toolTipText: "Carpeta superior (Alt+↑)"
+                    onClicked: window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate")
+                }
+                ActionButton {
+                    id: homeNavBtn
+                    visible: !window.sidebarOpen
+                    iconName: "home"
+                    ghost: true
+                    implicitWidth: 32
+                    implicitHeight: 34
+                    enabled: window.bridge.ready && !window.bridge.busy
+                    toolTipText: "Ir a Inicio"
+                    onClicked: window.bridge.home()
+                }
+            }
+
+            // Barra de ruta / breadcrumbs en una sola cápsula de cristal.
+            GlassPanel {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 120
+                implicitHeight: 36
+                radius: GemaTheme.controlRadius
+                highlighted: window.editingPath
+                topColor: window.editingPath ? "#20ffffff" : (GemaTheme.darkText ? "#22ffffff" : "#180b0f1a")
+                bottomColor: GemaTheme.darkText ? "#14ffffff" : "#1e080c15"
+                edgeColor: window.editingPath ? GemaTheme.accentAlpha(0.75) : "#30ffffff"
+
+                TextField {
+                    id: pathField
+                    anchors.fill: parent
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
+                    visible: window.editingPath
+                    enabled: window.bridge.ready && !window.bridge.busy
+                    selectByMouse: true
+                    placeholderText: "Escribir ruta absoluta…"
+                    placeholderTextColor: GemaTheme.placeholderColor
+                    text: window.bridge.path
+                    color: GemaTheme.textColor
+                    selectionColor: GemaTheme.accentAlpha(0.45)
+                    selectedTextColor: "#ffffff"
+                    font.pixelSize: 13
+                    verticalAlignment: Text.AlignVCenter
+                    background: null
+                    onAccepted: {
+                        const target = pathField.text;
+                        window.editingPath = false;
+                        window.bridge.list(target, window.bridge.showHidden, "navigate");
+                    }
+                    onActiveFocusChanged: if (!pathField.activeFocus && window.editingPath) { pathField.text = window.bridge.path; window.editingPath = false; }
+                    Keys.onEscapePressed: { pathField.text = window.bridge.path; window.editingPath = false; }
+                }
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 5
+                    anchors.rightMargin: 4
+                    spacing: 2
+                    visible: !window.editingPath
+
+                    Flickable {
+                        id: crumbsFlickable
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        flickableDirection: Flickable.HorizontalFlick
+                        boundsBehavior: Flickable.StopAtBounds
+                        contentWidth: Math.max(crumbs.implicitWidth, crumbsFlickable.width)
+                        contentHeight: crumbsFlickable.height
+                        function scrollToEnd() { crumbsFlickable.contentX = Math.max(0, crumbsFlickable.contentWidth - crumbsFlickable.width); }
+                        Component.onCompleted: crumbsFlickable.scrollToEnd()
+                        onContentWidthChanged: crumbsFlickable.scrollToEnd()
+                        onWidthChanged: crumbsFlickable.scrollToEnd()
+
+                        MouseArea {
+                            width: crumbsFlickable.contentWidth
+                            height: crumbsFlickable.height
+                            cursorShape: Qt.IBeamCursor
+                            enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
+                            onClicked: window.startEditPath()
+                        }
+
+                        Row {
+                            id: crumbs
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 2
+
+                            // Segmento raíz "/".
+                            Rectangle {
+                                id: rootCrumb
+                                implicitWidth: 26
+                                implicitHeight: 26
+                                radius: 7
+                                color: rootCrumbMouse.containsMouse ? "#24ffffff" : (window.pathSegments.length === 0 ? GemaTheme.accentAlpha(0.24) : "transparent")
+                                Behavior on color { ColorAnimation { duration: GemaTheme.animDuration } }
+                                GlassIcon {
+                                    anchors.centerIn: parent
+                                    name: "root"
+                                    size: 13
+                                    color: window.pathSegments.length === 0 ? GemaTheme.accent : GemaTheme.mutedColor
+                                }
+                                MouseArea {
+                                    id: rootCrumbMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    enabled: window.bridge.ready && !window.bridge.busy
+                                    onClicked: window.bridge.list("/", window.bridge.showHidden, "navigate")
+                                }
+                                GlassToolTip { visible: rootCrumbMouse.containsMouse; text: "Sistema (/)" }
+                            }
+
+                            Repeater {
+                                model: window.pathSegments
+                                Row {
+                                    id: crumbItem
+                                    required property string modelData
+                                    required property int index
+                                    readonly property bool isCurrent: crumbItem.index === window.pathSegments.length - 1
+                                    spacing: 2
+
+                                    GlassIcon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        name: "chevron-right"
+                                        size: 12
+                                        color: GemaTheme.subtleColor
+                                        opacity: 0.65
+                                    }
+
+                                    Rectangle {
+                                        implicitWidth: crumbLabel.implicitWidth + 16
+                                        implicitHeight: 26
+                                        radius: 7
+                                        color: crumbMouse.containsMouse
+                                               ? "#24ffffff"
+                                               : (crumbItem.isCurrent ? GemaTheme.accentAlpha(0.22) : "transparent")
+                                        border.width: crumbItem.isCurrent ? 1 : 0
+                                        border.color: GemaTheme.accentAlpha(0.35)
+                                        Behavior on color { ColorAnimation { duration: GemaTheme.animDuration } }
+
+                                        Text {
+                                            id: crumbLabel
+                                            anchors.centerIn: parent
+                                            text: crumbItem.modelData
+                                            textFormat: Text.PlainText
+                                            color: crumbItem.isCurrent ? GemaTheme.textColor : GemaTheme.mutedColor
+                                            font.pixelSize: 13
+                                            font.weight: crumbItem.isCurrent ? Font.DemiBold : Font.Normal
+                                        }
+
+                                        MouseArea {
+                                            id: crumbMouse
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            enabled: window.bridge.ready && !window.bridge.busy
+                                            onClicked: window.bridge.list("/" + window.pathSegments.slice(0, crumbItem.index + 1).join("/"), window.bridge.showHidden, "navigate")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ActionButton {
+                        id: editBtn
+                        iconName: "edit"
+                        iconSize: 13
+                        ghost: true
+                        implicitWidth: 28
+                        implicitHeight: 28
+                        cornerRadius: 7
+                        toolTipText: "Editar ruta (Ctrl+L)"
+                        enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
+                        onClicked: window.startEditPath()
+                    }
+                }
+            }
+
+            // Buscador compacto integrado con icono y botón limpiar inline.
+            GlassPanel {
+                Layout.preferredWidth: window.width >= 960 ? 245 : (window.width >= 720 ? 195 : 145)
+                Layout.minimumWidth: 120
+                implicitHeight: 36
+                radius: GemaTheme.controlRadius
+                highlighted: search.activeFocus
+                topColor: search.activeFocus ? "#22ffffff" : (GemaTheme.darkText ? "#22ffffff" : "#180b0f1a")
+                bottomColor: GemaTheme.darkText ? "#14ffffff" : "#1e080c15"
+                edgeColor: search.activeFocus ? GemaTheme.accentAlpha(0.76) : "#30ffffff"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 4
+                    spacing: 6
+
+                    GlassIcon {
+                        name: "search"
+                        size: 14
+                        color: search.activeFocus || search.text.length > 0 ? GemaTheme.accent : GemaTheme.subtleColor
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    TextField {
+                        id: search
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumWidth: 0
+                        placeholderText: window.width >= 820 ? "Buscar… (Ctrl+F)" : "Buscar…"
+                        placeholderTextColor: GemaTheme.placeholderColor
+                        Accessible.name: "Buscar por nombre en esta carpeta"
+                        selectByMouse: true
+                        color: GemaTheme.textColor
+                        selectionColor: GemaTheme.accentAlpha(0.45)
+                        selectedTextColor: "#ffffff"
+                        font.pixelSize: 13
+                        leftPadding: 0
+                        rightPadding: 0
+                        verticalAlignment: Text.AlignVCenter
+                        background: null
+                        onTextChanged: window.uiError = ""
+                        Keys.onEscapePressed: (event) => { search.clear(); event.accepted = true; }
+                    }
+
+                    ActionButton {
+                        visible: search.text.length > 0
+                        iconName: "x"
+                        iconSize: 13
+                        ghost: true
+                        implicitWidth: 26
+                        implicitHeight: 26
+                        cornerRadius: 7
+                        toolTipText: "Limpiar búsqueda (Esc)"
+                        onClicked: { search.clear(); search.forceActiveFocus(); }
+                    }
+                }
+            }
         }
+
+        // === BARRA DE ACCIONES Y CONTROLES DE VISTA ===
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
-            Text { visible: window.width >= 760; text: "CONTENIDO"; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
+
+            ActionButton {
+                id: newFolderBtn
+                iconName: "folder-plus"
+                text: window.width >= 760 ? "Nueva carpeta" : ""
+                toolTipText: "Nueva carpeta (Ctrl+Shift+N)"
+                enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
+                onClicked: window.openMkdirDialog()
+            }
+
+            ActionButton {
+                id: termBtn
+                iconName: "terminal"
+                text: window.width >= 840 ? "Terminal" : ""
+                toolTipText: "Abrir terminal en esta carpeta"
+                enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
+                onClicked: window.bridge.openTerminal(window.bridge.path)
+            }
+
+            ActionButton {
+                id: refreshBtn
+                iconName: "refresh"
+                ghost: true
+                implicitWidth: 34
+                toolTipText: "Actualizar (F5)"
+                enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
+                onClicked: { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); }
+            }
+
+            // Píldora contextual para pegar cuando el portapapeles está activo.
+            GlassPanel {
+                visible: window.clipboardPath !== ""
+                implicitHeight: 34
+                implicitWidth: clipRow.implicitWidth + 8
+                Layout.maximumWidth: 240
+                radius: GemaTheme.controlRadius
+                topColor: GemaTheme.accentAlpha(0.24)
+                bottomColor: GemaTheme.accentAlpha(0.12)
+                edgeColor: GemaTheme.accentAlpha(0.55)
+
+                RowLayout {
+                    id: clipRow
+                    anchors.fill: parent
+                    anchors.leftMargin: 4
+                    anchors.rightMargin: 4
+                    spacing: 2
+                    ActionButton {
+                        Layout.fillWidth: true
+                        implicitHeight: 26
+                        ghost: true
+                        iconName: "clipboard"
+                        iconSize: 13
+                        text: (window.clipboardMode === "cut" ? "Mover: " : "Pegar: ") + window.clipboardName
+                        toolTipText: "Pegar aquí (Ctrl+V)"
+                        enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
+                        onClicked: window.pasteClipboard()
+                    }
+                    ActionButton {
+                        implicitWidth: 24
+                        implicitHeight: 24
+                        cornerRadius: 6
+                        ghost: true
+                        iconName: "x"
+                        iconSize: 12
+                        toolTipText: "Vaciar portapapeles"
+                        onClicked: window.clearClipboard()
+                    }
+                }
+            }
+
             Item { Layout.fillWidth: true }
+
+            // Selector de ordenación + dirección.
             GlassComboBox {
                 id: sortCombo
-                implicitWidth: 112
+                implicitWidth: 108
                 implicitHeight: 34
-                model: [{"key": "name", "label": "Nombre"}, {"key": "mtime", "label": "Fecha"}, {"key": "size", "label": "Tamaño"}, {"key": "type", "label": "Tipo"}]
+                model: [
+                    {"key": "name", "label": "Nombre"},
+                    {"key": "mtime", "label": "Fecha"},
+                    {"key": "size", "label": "Tamaño"},
+                    {"key": "type", "label": "Tipo"}
+                ]
                 textRole: "label"
                 valueRole: "key"
                 currentIndex: Math.max(0, sortCombo.indexOfValue(window.bridge.sortBy))
                 enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
                 onActivated: window.bridge.setSort(String(sortCombo.currentValue), window.bridge.sortDesc)
             }
+
             ActionButton {
                 id: sortDirBtn
-                text: window.bridge.sortDesc ? "↓" : "↑"
-                ToolTip.visible: sortDirBtn.hovered
-                ToolTip.text: window.bridge.sortDesc ? "Orden descendente" : "Orden ascendente"
+                iconName: window.bridge.sortDesc ? "sort-desc" : "sort-asc"
+                implicitWidth: 34
+                toolTipText: window.bridge.sortDesc ? "Orden descendente (clic para invertir)" : "Orden ascendente (clic para invertir)"
                 enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
                 onClicked: window.bridge.setSort(window.bridge.sortBy, !window.bridge.sortDesc)
             }
-            ActionButton { text: "Cuadrícula"; enabled: !window.gridMode; onClicked: window.switchView(true) }
-            ActionButton { text: "Lista"; enabled: window.gridMode; onClicked: window.switchView(false) }
+
+            // Control segmentado para cambiar entre Cuadrícula y Lista (estado activo claro).
+            GlassPanel {
+                implicitHeight: 34
+                implicitWidth: viewSwitchRow.implicitWidth + 6
+                radius: GemaTheme.controlRadius + 1
+                reflective: false
+                topColor: GemaTheme.darkText ? "#1effffff" : "#1a0a0e18"
+                bottomColor: GemaTheme.darkText ? "#12ffffff" : "#1c080b14"
+                edgeColor: "#2effffff"
+
+                RowLayout {
+                    id: viewSwitchRow
+                    anchors.centerIn: parent
+                    spacing: 2
+
+                    ActionButton {
+                        iconName: "grid"
+                        iconSize: 14
+                        text: window.width >= 760 ? "Cuadrícula" : ""
+                        active: window.gridMode
+                        ghost: !window.gridMode
+                        implicitHeight: 28
+                        horizontalPadding: window.width >= 760 ? 10 : 8
+                        cornerRadius: Math.max(6, GemaTheme.controlRadius - 2)
+                        toolTipText: "Vista en cuadrícula (Ctrl+1)"
+                        onClicked: window.switchView(true)
+                    }
+                    ActionButton {
+                        iconName: "list"
+                        iconSize: 14
+                        text: window.width >= 760 ? "Lista" : ""
+                        active: !window.gridMode
+                        ghost: window.gridMode
+                        implicitHeight: 28
+                        horizontalPadding: window.width >= 760 ? 10 : 8
+                        cornerRadius: Math.max(6, GemaTheme.controlRadius - 2)
+                        toolTipText: "Vista en lista (Ctrl+2)"
+                        onClicked: window.switchView(false)
+                    }
+                }
+            }
+
+            // Interruptor glass para archivos ocultos.
             CheckBox {
                 id: hiddenCheck
-                text: "Mostrar ocultos"
                 checked: window.bridge.showHidden
                 enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
+                hoverEnabled: true
+                implicitHeight: 34
+                leftPadding: 10
+                rightPadding: 10
+                topPadding: 0
+                bottomPadding: 0
                 onClicked: window.bridge.list(window.bridge.path, hiddenCheck.checked, "refresh")
-                contentItem: Text { text: hiddenCheck.text; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; verticalAlignment: Text.AlignVCenter; leftPadding: hiddenCheck.indicator.width + 6; font.pixelSize: 12 }
+
+                indicator: Item { width: 0; height: 0 }
+
+                background: GlassPanel {
+                    radius: GemaTheme.controlRadius
+                    topColor: hiddenCheck.checked
+                              ? GemaTheme.accentAlpha(hiddenCheck.hovered ? 0.36 : 0.26)
+                              : (hiddenCheck.hovered ? "#22ffffff" : "#15ffffff")
+                    bottomColor: hiddenCheck.checked ? GemaTheme.accentAlpha(0.14) : "#0cffffff"
+                    edgeColor: hiddenCheck.checked
+                               ? GemaTheme.accentAlpha(0.72)
+                               : (hiddenCheck.hovered ? GemaTheme.accentAlpha(0.48) : "#30ffffff")
+                    opacity: hiddenCheck.enabled ? 1.0 : 0.55
+                }
+
+                contentItem: RowLayout {
+                    spacing: 7
+                    GlassIcon {
+                        name: hiddenCheck.checked ? "eye" : "eye-off"
+                        size: 14
+                        color: hiddenCheck.checked ? GemaTheme.accent : GemaTheme.mutedColor
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    Text {
+                        visible: window.width >= 660
+                        text: "Ocultos"
+                        textFormat: Text.PlainText
+                        color: hiddenCheck.checked ? GemaTheme.textColor : GemaTheme.mutedColor
+                        font.pixelSize: 13
+                        font.weight: hiddenCheck.checked ? Font.DemiBold : Font.Medium
+                        verticalAlignment: Text.AlignVCenter
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    // Mini switch translúcido.
+                    Rectangle {
+                        implicitWidth: 26
+                        implicitHeight: 15
+                        radius: 7.5
+                        color: hiddenCheck.checked ? GemaTheme.accentAlpha(0.55) : "#22ffffff"
+                        border.width: 1
+                        border.color: hiddenCheck.checked ? GemaTheme.accentAlpha(0.85) : "#34ffffff"
+                        Layout.alignment: Qt.AlignVCenter
+                        Behavior on color { ColorAnimation { duration: GemaTheme.animDuration } }
+
+                        Rectangle {
+                            width: 11
+                            height: 11
+                            radius: 5.5
+                            y: 2
+                            x: hiddenCheck.checked ? 13 : 2
+                            color: hiddenCheck.checked ? "#ffffff" : GemaTheme.mutedColor
+                            Behavior on x { NumberAnimation { duration: GemaTheme.animDuration; easing.type: Easing.OutCubic } }
+                        }
+                    }
+                }
+
+                GlassToolTip {
+                    visible: hiddenCheck.hovered
+                    text: hiddenCheck.checked ? "Ocultar archivos que empiezan con punto" : "Mostrar archivos ocultos"
+                }
             }
         }
+
+        // === ESPACIO PRINCIPAL: BARRA LATERAL DE LUGARES + PANEL DE CONTENIDO ===
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 10
+
+            // Barra lateral de lugares.
             GlassPanel {
-                Layout.preferredWidth: window.width < 680 ? 150 : 185
+                Layout.preferredWidth: window.width < 720 ? 172 : 204
                 Layout.fillHeight: true
                 visible: window.sidebarOpen
-                topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff"
+                topColor: GemaTheme.darkText ? "#22ffffff" : "#14ffffff"
+                bottomColor: GemaTheme.darkText ? "#14ffffff" : "#180a0e18"
+                edgeColor: "#32ffffff"
                 clip: true
+
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 10
                     spacing: 6
-                    Text { text: "LUGARES"; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.bold: true; font.pixelSize: 11; font.letterSpacing: 1 }
+
+                    Text {
+                        text: "LUGARES"
+                        color: GemaTheme.subtleColor
+                        font.weight: Font.DemiBold
+                        font.pixelSize: 10
+                        font.letterSpacing: 1.4
+                        leftPadding: 8
+                        topPadding: 2
+                        bottomPadding: 2
+                    }
+
                     ListView {
                         id: placesList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
+                        spacing: 2
                         model: window.bridge.places
-                        ScrollBar.vertical: ScrollBar { }
-                        delegate: Rectangle {
-                            id: placeRow
+                        ScrollBar.vertical: GlassScrollBar {}
+
+                        delegate: Item {
+                            id: placeDelegate
                             required property var modelData
                             required property int index
-                            width: placesList.width
-                            height: 34
-                            radius: 8
-                            color: window.bridge.path === placeRow.modelData.path ? GemaTheme.accentAlpha(0.30) : (placeMouse.containsMouse ? "#18ffffff" : "transparent")
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 8; anchors.rightMargin: 8
-                                spacing: 8
-                                Text { text: window.placeIcon(placeRow.modelData.kind); font.pixelSize: 15; color: GemaTheme.darkText ? "#263d50" : "#ffffff" }
-                                Text { text: placeRow.modelData.name; textFormat: Text.PlainText; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 13 }
+                            readonly property bool isActive: window.bridge.path === placeDelegate.modelData.path
+                            readonly property bool needsSeparator: {
+                                if (placeDelegate.index <= 0) return false;
+                                const prev = window.bridge.places[placeDelegate.index - 1];
+                                if (!prev) return false;
+                                return window.placeGroup(placeDelegate.modelData.kind) !== window.placeGroup(prev.kind);
                             }
-                            MouseArea {
-                                id: placeMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                enabled: window.bridge.ready && !window.bridge.busy
-                                onClicked: { window.uiError = ""; window.bridge.list(placeRow.modelData.path, window.bridge.showHidden, "navigate"); }
+
+                            width: placesList.width
+                            height: needsSeparator ? 46 : 35
+
+                            Rectangle {
+                                visible: placeDelegate.needsSeparator
+                                anchors.top: parent.top
+                                anchors.topMargin: 5
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                height: 1
+                                color: "#1effffff"
+                            }
+
+                            Rectangle {
+                                id: placeRow
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                height: 35
+                                radius: 9
+                                color: placeDelegate.isActive
+                                       ? GemaTheme.accentAlpha(0.24)
+                                       : (placeMouse.containsMouse ? "#1affffff" : "transparent")
+                                border.width: placeDelegate.isActive ? 1 : 0
+                                border.color: GemaTheme.accentAlpha(0.44)
+                                Behavior on color { ColorAnimation { duration: GemaTheme.animDuration } }
+
+                                // Indicador vertical luminoso para el lugar activo.
+                                Rectangle {
+                                    visible: placeDelegate.isActive
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 3
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 3
+                                    height: 16
+                                    radius: 1.5
+                                    color: GemaTheme.accent
+                                }
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 10
+                                    spacing: 10
+
+                                    GlassIcon {
+                                        name: window.placeIcon(placeDelegate.modelData.kind)
+                                        size: 15
+                                        color: placeDelegate.isActive
+                                               ? GemaTheme.accent
+                                               : (placeMouse.containsMouse ? GemaTheme.textColor : GemaTheme.mutedColor)
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+
+                                    Text {
+                                        text: placeDelegate.modelData.name
+                                        textFormat: Text.PlainText
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        elide: Text.ElideRight
+                                        color: placeDelegate.isActive ? GemaTheme.textColor : (placeMouse.containsMouse ? GemaTheme.textColor : GemaTheme.mutedColor)
+                                        font.pixelSize: 13
+                                        font.weight: placeDelegate.isActive ? Font.DemiBold : Font.Normal
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: placeMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    enabled: window.bridge.ready && !window.bridge.busy
+                                    onClicked: {
+                                        window.uiError = "";
+                                        window.bridge.list(placeDelegate.modelData.path, window.bridge.showHidden, "navigate");
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+
+            // Panel principal de archivos y carpetas.
             GlassPanel {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff"
+                topColor: GemaTheme.darkText ? "#1effffff" : "#140c101b"
+                bottomColor: GemaTheme.darkText ? "#12ffffff" : "#20080b14"
+                edgeColor: "#32ffffff"
                 clip: true
+
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 2
-                    RowLayout {
+                    anchors.margins: 12
+                    spacing: 6
+
+                    // Encabezado interactivo de columnas en vista Lista.
+                    Item {
                         Layout.fillWidth: true
+                        implicitHeight: 30
                         visible: !window.gridMode
-                        Text { text: "Nombre"; Layout.fillWidth: true; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 11 }
-                        Text { text: "Modificado"; visible: window.width >= 760; Layout.preferredWidth: 125; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 11 }
-                        Text { text: "Tipo"; Layout.preferredWidth: 85; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 11 }
-                        Text { text: "Tamaño"; Layout.preferredWidth: 75; horizontalAlignment: Text.AlignRight; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 11 }
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            spacing: 10
+
+                            Item {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 4
+                                    Text {
+                                        text: "NOMBRE"
+                                        color: window.bridge.sortBy === "name" ? GemaTheme.accent : GemaTheme.subtleColor
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 1.0
+                                    }
+                                    GlassIcon {
+                                        visible: window.bridge.sortBy === "name"
+                                        name: window.bridge.sortDesc ? "chevron-down" : "chevron-up"
+                                        size: 12
+                                        color: GemaTheme.accent
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: window.toggleSort("name")
+                                }
+                            }
+
+                            Item {
+                                visible: window.width >= 760
+                                Layout.preferredWidth: 136
+                                Layout.fillHeight: true
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 4
+                                    Text {
+                                        text: "MODIFICADO"
+                                        color: window.bridge.sortBy === "mtime" ? GemaTheme.accent : GemaTheme.subtleColor
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 1.0
+                                    }
+                                    GlassIcon {
+                                        visible: window.bridge.sortBy === "mtime"
+                                        name: window.bridge.sortDesc ? "chevron-down" : "chevron-up"
+                                        size: 12
+                                        color: GemaTheme.accent
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: window.toggleSort("mtime")
+                                }
+                            }
+
+                            Item {
+                                Layout.preferredWidth: 88
+                                Layout.fillHeight: true
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 4
+                                    Text {
+                                        text: "TIPO"
+                                        color: window.bridge.sortBy === "type" ? GemaTheme.accent : GemaTheme.subtleColor
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 1.0
+                                    }
+                                    GlassIcon {
+                                        visible: window.bridge.sortBy === "type"
+                                        name: window.bridge.sortDesc ? "chevron-down" : "chevron-up"
+                                        size: 12
+                                        color: GemaTheme.accent
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: window.toggleSort("type")
+                                }
+                            }
+
+                            Item {
+                                Layout.preferredWidth: 84
+                                Layout.fillHeight: true
+                                RowLayout {
+                                    anchors.fill: parent
+                                    spacing: 4
+                                    Item { Layout.fillWidth: true }
+                                    GlassIcon {
+                                        visible: window.bridge.sortBy === "size"
+                                        name: window.bridge.sortDesc ? "chevron-down" : "chevron-up"
+                                        size: 12
+                                        color: GemaTheme.accent
+                                    }
+                                    Text {
+                                        text: "TAMAÑO"
+                                        color: window.bridge.sortBy === "size" ? GemaTheme.accent : GemaTheme.subtleColor
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 1.0
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: window.toggleSort("size")
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: 1
+                            color: "#22ffffff"
+                        }
                     }
+
+                    // === VISTA LISTA ===
                     ListView {
                         id: listing
                         Layout.fillWidth: true
@@ -365,83 +1170,149 @@ FloatingWindow {
                         visible: !window.gridMode
                         clip: true
                         focus: !window.gridMode
+                        spacing: 2
                         model: window.filteredEntries
                         currentIndex: -1
                         onModelChanged: listing.currentIndex = -1
-                        ScrollBar.vertical: ScrollBar { }
+                        ScrollBar.vertical: GlassScrollBar {}
                         Keys.onReturnPressed: window.openEntry(window.filteredEntries[listing.currentIndex])
                         Keys.onEnterPressed: window.openEntry(window.filteredEntries[listing.currentIndex])
+
                         delegate: Rectangle {
                             id: row
                             required property var modelData
                             required property int index
+                            readonly property bool isSelected: listing.currentIndex === row.index
+                            readonly property color itemTone: row.modelData.isDir ? GemaTheme.accent : window.fileColor(row.modelData.name)
                             width: listing.width
-                            height: 42
-                            radius: 8
-                            color: listing.currentIndex === row.index ? GemaTheme.accentAlpha(0.30) : (mouse.containsMouse ? "#18ffffff" : "transparent")
+                            height: 40
+                            radius: 9
+                            color: row.isSelected
+                                   ? GemaTheme.accentAlpha(0.26)
+                                   : (mouse.containsMouse ? "#18ffffff" : "transparent")
+                            border.width: row.isSelected ? 1 : 0
+                            border.color: GemaTheme.accentAlpha(0.50)
+                            Behavior on color { ColorAnimation { duration: GemaTheme.animDuration } }
+
                             RowLayout {
                                 anchors.fill: parent
-                                anchors.leftMargin: 8; anchors.rightMargin: 8
-                                spacing: 8
-                                Text { text: row.modelData.isDir ? "▰" : "▤"; font.pixelSize: 18; color: row.modelData.isDir ? GemaTheme.accent : (GemaTheme.darkText ? "#263d50" : "#ffffff") }
-                                Text { text: row.modelData.name; textFormat: Text.PlainText; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideMiddle; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 13 }
-                                Text { text: window.dateText(row.modelData.mtime); visible: window.width >= 760; Layout.preferredWidth: 125; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 12 }
-                                Text { text: row.modelData.isDir ? "Carpeta" : "Archivo"; Layout.preferredWidth: 85; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 12 }
-                                Text { text: row.modelData.isDir ? "—" : window.sizeText(row.modelData.size); Layout.preferredWidth: 75; horizontalAlignment: Text.AlignRight; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 12 }
+                                anchors.leftMargin: 10
+                                anchors.rightMargin: 10
+                                spacing: 10
+
+                                Rectangle {
+                                    implicitWidth: 26
+                                    implicitHeight: 26
+                                    radius: 7
+                                    color: Qt.rgba(row.itemTone.r, row.itemTone.g, row.itemTone.b, row.modelData.isDir ? 0.22 : 0.16)
+                                    border.width: 1
+                                    border.color: Qt.rgba(row.itemTone.r, row.itemTone.g, row.itemTone.b, 0.42)
+                                    Layout.alignment: Qt.AlignVCenter
+                                    GlassIcon {
+                                        anchors.centerIn: parent
+                                        name: row.modelData.isDir ? "folder" : window.fileIcon(row.modelData.name)
+                                        size: 14
+                                        color: row.itemTone
+                                    }
+                                }
+
+                                Text {
+                                    text: row.modelData.name
+                                    textFormat: Text.PlainText
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    elide: Text.ElideMiddle
+                                    color: GemaTheme.textColor
+                                    font.pixelSize: 13
+                                    font.weight: row.isSelected ? Font.DemiBold : (row.modelData.isDir ? Font.Medium : Font.Normal)
+                                }
+
+                                Text {
+                                    text: window.dateText(row.modelData.mtime)
+                                    visible: window.width >= 760
+                                    Layout.preferredWidth: 136
+                                    color: row.isSelected ? GemaTheme.mutedColor : GemaTheme.subtleColor
+                                    font.pixelSize: 12
+                                }
+
+                                Text {
+                                    text: row.modelData.isDir ? "Carpeta" : window.fileLabel(row.modelData.name)
+                                    Layout.preferredWidth: 88
+                                    color: row.modelData.isDir ? (row.isSelected ? GemaTheme.mutedColor : GemaTheme.subtleColor) : row.itemTone
+                                    font.pixelSize: 11
+                                    font.weight: row.modelData.isDir ? Font.Normal : Font.Medium
+                                }
+
+                                Text {
+                                    text: row.modelData.isDir ? "—" : window.sizeText(row.modelData.size)
+                                    Layout.preferredWidth: 84
+                                    horizontalAlignment: Text.AlignRight
+                                    color: row.isSelected ? GemaTheme.mutedColor : GemaTheme.subtleColor
+                                    font.pixelSize: 12
+                                }
                             }
+
                             MouseArea {
                                 id: mouse
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                onClicked: (mouse) => {
+                                onClicked: (mouseEvent) => {
                                     listing.currentIndex = row.index;
                                     listing.forceActiveFocus();
-                                    if (mouse.button === Qt.RightButton) window.openContextMenu(row.modelData, row, mouse.x, mouse.y);
+                                    if (mouseEvent.button === Qt.RightButton) window.openContextMenu(row.modelData, row, mouseEvent.x, mouseEvent.y);
                                 }
-                                onDoubleClicked: (mouse) => { if (mouse.button === Qt.LeftButton) window.openEntry(row.modelData); }
+                                onDoubleClicked: (mouseEvent) => { if (mouseEvent.button === Qt.LeftButton) window.openEntry(row.modelData); }
                             }
                         }
+
                         MouseArea {
                             z: -1
                             parent: listing
                             anchors.fill: parent
-                            acceptedButtons: Qt.RightButton
-                            onClicked: (mouse) => window.openContextMenu(null, listing, mouse.x, mouse.y)
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            onClicked: (mouseEvent) => {
+                                if (mouseEvent.button === Qt.RightButton) window.openContextMenu(null, listing, mouseEvent.x, mouseEvent.y);
+                                else listing.currentIndex = -1;
+                            }
                         }
-                        Text {
-                            anchors.centerIn: parent
-                            visible: window.filteredEntries.length === 0
-                            text: window.bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (window.bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
-                            color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 14
-                        }
+
+                        EmptyState { visible: window.filteredEntries.length === 0 }
                     }
+
+                    // === VISTA CUADRÍCULA ===
                     GridView {
                         id: grid
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        Layout.leftMargin: 4
+                        Layout.rightMargin: -4
                         visible: window.gridMode
                         focus: window.gridMode
                         clip: true
-                        cellWidth: grid.width / Math.max(1, Math.floor(grid.width / 130))
-                        cellHeight: 132
+                        cellWidth: Math.floor(grid.width / Math.max(1, Math.floor(grid.width / 138)))
+                        cellHeight: 134
                         model: window.filteredEntries
                         currentIndex: -1
                         onModelChanged: grid.currentIndex = -1
-                        ScrollBar.vertical: ScrollBar { }
+                        ScrollBar.vertical: GlassScrollBar {}
                         Keys.onReturnPressed: window.openEntry(window.filteredEntries[grid.currentIndex])
                         Keys.onEnterPressed: window.openEntry(window.filteredEntries[grid.currentIndex])
+
                         delegate: ExplorerIconCard {
                             id: card
                             required property var modelData
                             required property int index
-                            width: grid.cellWidth - 6
-                            height: grid.cellHeight - 6
+                            width: grid.cellWidth - 8
+                            height: grid.cellHeight - 8
                             path: card.modelData.path
                             name: card.modelData.name
                             directory: card.modelData.isDir
                             itemAccent: card.directory ? GemaTheme.accent : window.fileColor(card.name)
                             langLabel: card.directory ? "" : window.fileLabel(card.name)
+                            detailText: card.directory
+                                        ? card.path
+                                        : (window.sizeText(card.modelData.size) + "  ·  " + window.dateText(card.modelData.mtime))
                             focusPolicy: Qt.NoFocus
                             selected: grid.currentIndex === card.index
                             onClicked: { grid.currentIndex = card.index; grid.forceActiveFocus(); }
@@ -449,39 +1320,101 @@ FloatingWindow {
                             MouseArea {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.RightButton
-                                onClicked: (mouse) => { grid.currentIndex = card.index; grid.forceActiveFocus(); window.openContextMenu(card.modelData, card, mouse.x, mouse.y); }
+                                onClicked: (mouseEvent) => {
+                                    grid.currentIndex = card.index;
+                                    grid.forceActiveFocus();
+                                    window.openContextMenu(card.modelData, card, mouseEvent.x, mouseEvent.y);
+                                }
                             }
                         }
+
                         MouseArea {
                             z: -1
                             parent: grid
                             anchors.fill: parent
-                            acceptedButtons: Qt.RightButton
-                            onClicked: (mouse) => window.openContextMenu(null, grid, mouse.x, mouse.y)
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            onClicked: (mouseEvent) => {
+                                if (mouseEvent.button === Qt.RightButton) window.openContextMenu(null, grid, mouseEvent.x, mouseEvent.y);
+                                else grid.currentIndex = -1;
+                            }
                         }
-                        Text {
-                            anchors.centerIn: parent
-                            visible: window.filteredEntries.length === 0
-                            text: window.bridge.loading ? "Cargando carpeta…" : (search.text ? "Sin coincidencias" : (window.bridge.path ? "Esta carpeta está vacía" : "Esperando al motor…"))
-                            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-                        }
+
+                        EmptyState { visible: window.filteredEntries.length === 0 }
                     }
                 }
             }
         }
-        Text {
+
+        // === BARRA DE ESTADO INFERIOR ===
+        RowLayout {
             Layout.fillWidth: true
-            Layout.minimumWidth: 0
-            text: (window.bridge.error || window.uiError || window.statusMessage) ? (window.bridge.error || window.uiError || window.statusMessage) : (window.bridge.loading ? "Cargando…" : (window.bridge.mutating ? "Procesando…" : window.filteredEntries.length + " elementos" + (search.text ? " de " + window.bridge.entries.length + " · búsqueda activa" : "") + (window.bridge.skipped ? " · " + window.bridge.skipped + (window.bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : "") + (window.clipboardPath !== "" ? " · Portapapeles (" + (window.clipboardMode === "cut" ? "cortar" : "copiar") + "): " + window.clipboardName : "")))
-            textFormat: Text.PlainText
-            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-            elide: Text.ElideRight
-            font.pixelSize: 12
+            Layout.leftMargin: 4
+            Layout.rightMargin: 4
+            spacing: 8
+
+            Rectangle {
+                implicitWidth: 7
+                implicitHeight: 7
+                radius: 3.5
+                color: (window.bridge.error || window.uiError)
+                       ? GemaTheme.dangerColor
+                       : (window.statusMessage || window.bridge.loading || window.bridge.mutating)
+                         ? GemaTheme.accent
+                         : GemaTheme.accentAlpha(0.55)
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            Text {
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                text: {
+                    if (window.bridge.error || window.uiError) return window.bridge.error || window.uiError;
+                    if (window.statusMessage) return window.statusMessage;
+                    if (window.bridge.loading) return "Cargando carpeta…";
+                    if (window.bridge.mutating) return "Procesando operación…";
+                    const count = window.filteredEntries.length;
+                    let summary = count + (count === 1 ? " elemento" : " elementos");
+                    if (search.text.length > 0) summary += " de " + window.bridge.entries.length + " · filtro activo";
+                    if (window.currentEntry) {
+                        summary += "  ·  " + window.currentEntry.name;
+                        summary += window.currentEntry.isDir ? " (Carpeta)" : ("  ·  " + window.sizeText(window.currentEntry.size));
+                    }
+                    if (window.bridge.skipped > 0) {
+                        summary += "  ·  " + window.bridge.skipped + (window.bridge.skipped === 1 ? " entrada omitida" : " entradas omitidas");
+                    }
+                    return summary;
+                }
+                textFormat: Text.PlainText
+                color: (window.bridge.error || window.uiError) ? GemaTheme.dangerColor : GemaTheme.mutedColor
+                elide: Text.ElideRight
+                font.pixelSize: 12
+                font.weight: (window.bridge.error || window.uiError || window.statusMessage) ? Font.Medium : Font.Normal
+            }
+
+            Text {
+                visible: window.width >= 760
+                text: "Ctrl+F buscar  ·  Ctrl+L ruta  ·  F2 renombrar"
+                textFormat: Text.PlainText
+                color: GemaTheme.subtleColor
+                opacity: 0.72
+                font.pixelSize: 11
+            }
         }
     }
+
     Connections {
         target: window.bridge
-        function onListingSucceeded() { window.uiError = ""; if (window.listedPath !== window.bridge.path) search.clear(); window.listedPath = window.bridge.path; window.editingPath = false; pathField.text = window.bridge.path; listing.currentIndex = -1; grid.currentIndex = -1; crumbsFlickable.scrollToEnd(); sortCombo.currentIndex = Math.max(0, sortCombo.indexOfValue(window.bridge.sortBy)); }
+        function onListingSucceeded() {
+            window.uiError = "";
+            if (window.listedPath !== window.bridge.path) search.clear();
+            window.listedPath = window.bridge.path;
+            window.editingPath = false;
+            pathField.text = window.bridge.path;
+            listing.currentIndex = -1;
+            grid.currentIndex = -1;
+            crumbsFlickable.scrollToEnd();
+            sortCombo.currentIndex = Math.max(0, sortCombo.indexOfValue(window.bridge.sortBy));
+        }
         function onErrorChanged() {
             sortCombo.currentIndex = Math.max(0, sortCombo.indexOfValue(window.bridge.sortBy));
             if (window.bridge.error) {
@@ -494,13 +1427,13 @@ FloatingWindow {
         function onShowHiddenChanged() { hiddenCheck.checked = window.bridge.showHidden; }
         function onMutationSucceeded(action, sourcePath, targetPath) {
             window.uiError = "";
-            if (action === "move") { window.clipboardPath = ""; window.clipboardName = ""; window.clipboardMode = ""; }
+            if (action === "move") window.clearClipboard();
             if (window.clipboardPath !== "" && sourcePath !== "" && (window.clipboardPath === sourcePath || window.clipboardPath.startsWith(sourcePath + "/"))) {
                 if (action === "trash") {
-                    window.clipboardPath = ""; window.clipboardName = ""; window.clipboardMode = "";
+                    window.clearClipboard();
                 } else if (action === "rename") {
                     if (!targetPath) {
-                        window.clipboardPath = ""; window.clipboardName = ""; window.clipboardMode = "";
+                        window.clearClipboard();
                     } else if (window.clipboardPath === sourcePath) {
                         window.clipboardPath = targetPath;
                         window.clipboardName = targetPath.slice(targetPath.lastIndexOf("/") + 1);
@@ -509,40 +1442,59 @@ FloatingWindow {
                     }
                 }
             }
-            const messages = {mkdir: "Carpeta creada", rename: "Renombrado", trash: "Movido a la papelera", copy: "Copiado", move: "Movido"};
+            const messages = {mkdir: "Carpeta creada", rename: "Elemento renombrado", trash: "Movido a la papelera", copy: "Copiado correctamente", move: "Movido correctamente"};
             if (messages[action]) window.showStatus(messages[action]);
         }
         function onStatusNotice(message) { window.showStatus(message); }
     }
+
+    // === ATAJOS DE TECLADO ===
     Shortcut { sequence: "Ctrl+Shift+N"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== "" && !window.modalOpen; onActivated: window.openMkdirDialog() }
     Shortcut { sequence: "F2"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.openRenameDialog(window.selectedEntry()) }
     Shortcut { sequence: "Delete"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.openTrashDialog(window.selectedEntry()) }
     Shortcut { sequence: "Ctrl+C"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.setClipboard(window.selectedEntry(), "copy") }
     Shortcut { sequence: "Ctrl+X"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.setClipboard(window.selectedEntry(), "cut") }
     Shortcut { sequence: "Ctrl+V"; enabled: window.canMutate && window.clipboardPath !== "" && window.bridge.path !== ""; onActivated: window.pasteClipboard() }
+    Shortcut { sequence: "Alt+Left"; onActivated: window.bridge.back() }
+    Shortcut { sequence: "Alt+Right"; onActivated: window.bridge.forward() }
+    Shortcut { sequence: "Alt+Up"; onActivated: { if (window.bridge.parentPath && window.bridge.parentPath !== window.bridge.path) window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate"); } }
+    Shortcut { sequence: "Ctrl+L"; enabled: window.bridge.ready && !window.bridge.busy; onActivated: window.startEditPath() }
+    Shortcut { sequence: "Ctrl+F"; onActivated: { search.forceActiveFocus(); search.selectAll(); } }
+    Shortcut { sequence: "Ctrl+1"; onActivated: window.switchView(true) }
+    Shortcut { sequence: "Ctrl+2"; onActivated: window.switchView(false) }
+    Shortcut { sequence: "Ctrl+B"; onActivated: { window.sidebarManual = true; window.sidebarOpen = !window.sidebarOpen; } }
+    Shortcut { sequence: "F5"; onActivated: { if (window.bridge.path) { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } } }
+
+    // === MENÚS CONTEXTUALES ===
     Menu {
         id: entryMenu
         parent: surface
         padding: 6
-        background: MattePanel { overlay: true; radius: 12 }
-        GlassMenuItem { text: "Abrir"; onTriggered: window.openEntry(window.contextEntry) }
-        GlassMenuItem { text: "Copiar"; onTriggered: window.setClipboard(window.contextEntry, "copy") }
-        GlassMenuItem { text: "Cortar"; onTriggered: window.setClipboard(window.contextEntry, "cut") }
-        GlassMenuItem { text: "Renombrar"; enabled: !window.bridge.busy; onTriggered: window.openRenameDialog(window.contextEntry) }
-        GlassMenuItem { text: "Copiar ruta"; onTriggered: window.copyPath(window.contextEntry ? window.contextEntry.path : "") }
-        GlassMenuItem { text: "Mover a papelera"; enabled: !window.bridge.busy; onTriggered: window.openTrashDialog(window.contextEntry) }
+        background: MattePanel { overlay: true; radius: 13 }
+        GlassMenuItem { iconName: "folder-open"; text: "Abrir"; shortcutHint: "Enter"; onTriggered: window.openEntry(window.contextEntry) }
+        GlassMenuSeparator {}
+        GlassMenuItem { iconName: "copy"; text: "Copiar"; shortcutHint: "Ctrl+C"; onTriggered: window.setClipboard(window.contextEntry, "copy") }
+        GlassMenuItem { iconName: "scissors"; text: "Cortar"; shortcutHint: "Ctrl+X"; onTriggered: window.setClipboard(window.contextEntry, "cut") }
+        GlassMenuItem { iconName: "edit"; text: "Renombrar"; shortcutHint: "F2"; enabled: !window.bridge.busy; onTriggered: window.openRenameDialog(window.contextEntry) }
+        GlassMenuItem { iconName: "link"; text: "Copiar ruta"; onTriggered: window.copyPath(window.contextEntry ? window.contextEntry.path : "") }
+        GlassMenuSeparator {}
+        GlassMenuItem { iconName: "trash"; text: "Mover a papelera"; shortcutHint: "Supr"; destructive: true; enabled: !window.bridge.busy; onTriggered: window.openTrashDialog(window.contextEntry) }
     }
+
     Menu {
         id: folderMenu
         parent: surface
         padding: 6
-        background: MattePanel { overlay: true; radius: 12 }
-        GlassMenuItem { text: "Nueva carpeta"; enabled: !window.bridge.busy && window.bridge.path !== ""; onTriggered: window.openMkdirDialog() }
-        GlassMenuItem { text: "Pegar"; enabled: window.clipboardPath !== "" && !window.bridge.busy; onTriggered: window.pasteClipboard() }
-        GlassMenuItem { text: "Copiar ruta de carpeta"; onTriggered: window.copyPath(window.bridge.path) }
-        GlassMenuItem { text: "Abrir terminal aquí"; onTriggered: window.bridge.openTerminal(window.bridge.path) }
-        GlassMenuItem { text: "Actualizar"; enabled: !window.bridge.busy && window.bridge.path !== ""; onTriggered: { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } }
+        background: MattePanel { overlay: true; radius: 13 }
+        GlassMenuItem { iconName: "folder-plus"; text: "Nueva carpeta"; shortcutHint: "Ctrl+Shift+N"; enabled: !window.bridge.busy && window.bridge.path !== ""; onTriggered: window.openMkdirDialog() }
+        GlassMenuItem { iconName: "clipboard"; text: "Pegar"; shortcutHint: "Ctrl+V"; enabled: window.clipboardPath !== "" && !window.bridge.busy; onTriggered: window.pasteClipboard() }
+        GlassMenuSeparator {}
+        GlassMenuItem { iconName: "link"; text: "Copiar ruta de carpeta"; onTriggered: window.copyPath(window.bridge.path) }
+        GlassMenuItem { iconName: "terminal"; text: "Abrir terminal aquí"; onTriggered: window.bridge.openTerminal(window.bridge.path) }
+        GlassMenuItem { iconName: "refresh"; text: "Actualizar"; shortcutHint: "F5"; enabled: !window.bridge.busy && window.bridge.path !== ""; onTriggered: { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } }
     }
+
+    // === DIÁLOGOS MODALES ===
     GlassDialog {
         id: mkdirDialog
         parent: surface
@@ -557,24 +1509,38 @@ FloatingWindow {
         }
         contentItem: TextField {
             id: mkdirInput
+            implicitHeight: 38
+            leftPadding: 12
+            rightPadding: 12
             placeholderText: "Nombre de la carpeta"
+            placeholderTextColor: GemaTheme.placeholderColor
             selectByMouse: true
-            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-            background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
+            color: GemaTheme.textColor
+            selectionColor: GemaTheme.accentAlpha(0.45)
+            selectedTextColor: "#ffffff"
+            font.pixelSize: 13
+            background: GlassPanel {
+                radius: GemaTheme.controlRadius
+                highlighted: mkdirInput.activeFocus
+                topColor: "#1a0d1220"
+                bottomColor: "#220a0e18"
+                edgeColor: mkdirInput.activeFocus ? GemaTheme.accentAlpha(0.76) : "#36ffffff"
+            }
             onAccepted: mkdirDialog.submit()
         }
         footer: Item {
-            implicitHeight: 64
+            implicitHeight: 62
             RowLayout {
                 anchors.right: parent.right
-                anchors.rightMargin: 20
+                anchors.rightMargin: 22
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
-                ActionButton { text: "Cancelar"; onClicked: mkdirDialog.close() }
-                ActionButton { text: "Crear"; accent: true; enabled: window.validName(mkdirInput.text); onClicked: mkdirDialog.submit() }
+                ActionButton { text: "Cancelar"; ghost: true; onClicked: mkdirDialog.close() }
+                ActionButton { iconName: "folder-plus"; text: "Crear"; accent: true; enabled: window.validName(mkdirInput.text); onClicked: mkdirDialog.submit() }
             }
         }
     }
+
     GlassDialog {
         id: renameDialog
         parent: surface
@@ -590,24 +1556,38 @@ FloatingWindow {
         }
         contentItem: TextField {
             id: renameInput
+            implicitHeight: 38
+            leftPadding: 12
+            rightPadding: 12
             placeholderText: "Nuevo nombre"
+            placeholderTextColor: GemaTheme.placeholderColor
             selectByMouse: true
-            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-            background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
+            color: GemaTheme.textColor
+            selectionColor: GemaTheme.accentAlpha(0.45)
+            selectedTextColor: "#ffffff"
+            font.pixelSize: 13
+            background: GlassPanel {
+                radius: GemaTheme.controlRadius
+                highlighted: renameInput.activeFocus
+                topColor: "#1a0d1220"
+                bottomColor: "#220a0e18"
+                edgeColor: renameInput.activeFocus ? GemaTheme.accentAlpha(0.76) : "#36ffffff"
+            }
             onAccepted: renameDialog.submit()
         }
         footer: Item {
-            implicitHeight: 64
+            implicitHeight: 62
             RowLayout {
                 anchors.right: parent.right
-                anchors.rightMargin: 20
+                anchors.rightMargin: 22
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
-                ActionButton { text: "Cancelar"; onClicked: renameDialog.close() }
-                ActionButton { text: "Renombrar"; accent: true; enabled: window.validName(renameInput.text); onClicked: renameDialog.submit() }
+                ActionButton { text: "Cancelar"; ghost: true; onClicked: renameDialog.close() }
+                ActionButton { iconName: "check"; text: "Renombrar"; accent: true; enabled: window.validName(renameInput.text); onClicked: renameDialog.submit() }
             }
         }
     }
+
     GlassDialog {
         id: trashDialog
         parent: surface
@@ -619,20 +1599,21 @@ FloatingWindow {
             text: "¿Mover «" + (trashDialog.targetEntry ? trashDialog.targetEntry.name : "") + "» a la papelera?"
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
-            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
-            font.pixelSize: 14
+            color: GemaTheme.mutedColor
+            font.pixelSize: 13
         }
         footer: Item {
-            implicitHeight: 64
+            implicitHeight: 62
             RowLayout {
                 anchors.right: parent.right
-                anchors.rightMargin: 20
+                anchors.rightMargin: 22
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
-                ActionButton { text: "Cancelar"; onClicked: trashDialog.close() }
+                ActionButton { text: "Cancelar"; ghost: true; onClicked: trashDialog.close() }
                 ActionButton {
+                    iconName: "trash"
                     text: "Mover a papelera"
-                    accent: true
+                    destructive: true
                     onClicked: {
                         if (trashDialog.targetEntry) window.bridge.trashEntry(trashDialog.targetEntry.path);
                         trashDialog.close();
@@ -641,13 +1622,4 @@ FloatingWindow {
             }
         }
     }
-    Shortcut { sequence: "Alt+Left"; onActivated: window.bridge.back() }
-    Shortcut { sequence: "Alt+Right"; onActivated: window.bridge.forward() }
-    Shortcut { sequence: "Alt+Up"; onActivated: { if (window.bridge.parentPath && window.bridge.parentPath !== window.bridge.path) window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate"); } }
-    Shortcut { sequence: "Ctrl+L"; enabled: window.bridge.ready && !window.bridge.busy; onActivated: window.startEditPath() }
-    Shortcut { sequence: "Ctrl+F"; onActivated: { search.forceActiveFocus(); search.selectAll(); } }
-    Shortcut { sequence: "Ctrl+1"; onActivated: window.switchView(true) }
-    Shortcut { sequence: "Ctrl+2"; onActivated: window.switchView(false) }
-    Shortcut { sequence: "Ctrl+B"; onActivated: { window.sidebarManual = true; window.sidebarOpen = !window.sidebarOpen; } }
-    Shortcut { sequence: "F5"; onActivated: { if (window.bridge.path) { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } } }
 }
