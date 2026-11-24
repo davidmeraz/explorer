@@ -1,4 +1,4 @@
-# Explorer 0.1.0
+# Explorer 0.2.0
 
 Explorador de archivos para Wayland, con interfaz Quickshell/Qt Quick y motor Rust. Está orientado a Arch Linux y Hyprland; no instala asociaciones de archivos ni modifica la configuración del compositor.
 

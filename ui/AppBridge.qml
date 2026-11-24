@@ -6,7 +6,7 @@ QtObject {
     id: bridge
     property bool ready: false
     property string appName: "Explorer"
-    property string appVersion: "0.1.0"
+    property string appVersion: "0.2.0"
     property bool loading: false
     property bool mutating: false
     readonly property bool busy: loading || mutating
@@ -97,7 +97,7 @@ QtObject {
         if (event.type === "app.ready") {
             ready = true;
             appName = data.name || "Explorer";
-            appVersion = data.version || "0.1.0";
+            appVersion = data.version || "0.2.0";
             loadPlaces();
             home();
         } else if (event.type === "fs.listed" && loading) {
