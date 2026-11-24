@@ -1,11 +1,14 @@
 //! Explorer JSON Lines v2 backend.
 use serde_json::{json, Value};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::UNIX_EPOCH;
 
 fn event(kind: &str, data: Value) -> Value {
@@ -682,7 +685,415 @@ fn mutation(kind: &str, data: &Value) -> Result<Value, String> {
     }
 }
 
-fn handle(line: &str, ping_count: &mut u64) -> Value {
+const MAX_VIDEO_THUMB_BATCH: usize = 200;
+static THUMB_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn is_video_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "mp4"
+                    | "mkv"
+                    | "webm"
+                    | "avi"
+                    | "mov"
+                    | "m4v"
+                    | "flv"
+                    | "wmv"
+                    | "ogv"
+                    | "ts"
+                    | "m2ts"
+                    | "mpg"
+                    | "mpeg"
+                    | "3gp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn video_thumb_cache_dir() -> PathBuf {
+    if let Some(cache) = std::env::var_os("XDG_CACHE_HOME").filter(|s| !s.is_empty()) {
+        return PathBuf::from(cache)
+            .join("gema-explorer")
+            .join("video-thumbs");
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("gema-explorer")
+            .join("video-thumbs");
+    }
+    std::env::temp_dir().join("gema-explorer-video-thumbs")
+}
+
+fn fnv1a_64(parts: &[&[u8]]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for part in parts {
+        for &byte in *part {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn video_thumb_key(canonical: &str, size: u64, mtime: i64) -> String {
+    let size_bytes = size.to_le_bytes();
+    let mtime_bytes = mtime.to_le_bytes();
+    format!(
+        "{:016x}",
+        fnv1a_64(&[canonical.as_bytes(), &size_bytes, &mtime_bytes])
+    )
+}
+
+fn parse_ffmpeg_duration(stderr: &str) -> Option<u64> {
+    for line in stderr.lines() {
+        let Some(pos) = line.find("Duration:") else {
+            continue;
+        };
+        let rest = line[pos + "Duration:".len()..].trim_start();
+        let token = rest.split(',').next()?.trim();
+        if token == "N/A" {
+            return None;
+        }
+        let mut parts = token.split(':');
+        let hours: u64 = parts.next()?.parse().ok()?;
+        let mins: u64 = parts.next()?.parse().ok()?;
+        let secs_raw = parts.next()?;
+        let secs: u64 = secs_raw.split('.').next()?.parse().ok()?;
+        return Some(hours * 3600 + mins * 60 + secs);
+    }
+    None
+}
+
+fn run_ffmpeg_thumb(
+    input: &Path,
+    output: &Path,
+    seek_secs: &str,
+    use_thumb_filter: bool,
+) -> Option<Option<u64>> {
+    let vf = if use_thumb_filter {
+        "thumbnail=8,scale='min(480,iw)':-2"
+    } else {
+        "scale='min(480,iw)':-2"
+    };
+    let res = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "info", "-nostdin", "-ss", seek_secs, "-i"])
+        .arg(input)
+        .args(["-frames:v", "1", "-vf", vf, "-q:v", "4", "-an", "-sn", "-dn", "-y"])
+        .arg(output)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+    let duration = parse_ffmpeg_duration(&String::from_utf8_lossy(&res.stderr));
+    if fs::metadata(output).map(|m| m.len() > 0).unwrap_or(false) {
+        Some(duration)
+    } else {
+        let _ = fs::remove_file(output);
+        None
+    }
+}
+
+fn generate_video_thumb_in(path_str: &str, cache_dir: &Path) -> Option<(PathBuf, Option<u64>)> {
+    let input = Path::new(path_str);
+    if !input.is_absolute() || !is_video_path(input) {
+        return None;
+    }
+    let canonical = fs::canonicalize(input).ok()?;
+    let meta = fs::metadata(&canonical).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let canonical_str = canonical.to_str()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let key = video_thumb_key(canonical_str, meta.len(), mtime);
+    let thumb_path = cache_dir.join(format!("{key}.jpg"));
+    let dur_path = cache_dir.join(format!("{key}.dur"));
+    if fs::metadata(&thumb_path)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false)
+    {
+        let duration = fs::read_to_string(&dur_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        return Some((thumb_path, duration));
+    }
+    fs::create_dir_all(cache_dir).ok()?;
+    let seq = THUMB_TMP_SEQ.fetch_add(1, AtomicOrdering::Relaxed);
+    let tmp_path = cache_dir.join(format!("{key}.{}.{seq}.tmp.jpg", std::process::id()));
+    let duration = run_ffmpeg_thumb(&canonical, &tmp_path, "3", true)
+        .or_else(|| run_ffmpeg_thumb(&canonical, &tmp_path, "0", false))?;
+    if fs::rename(&tmp_path, &thumb_path).is_err() {
+        let _ = fs::remove_file(&tmp_path);
+        if !fs::metadata(&thumb_path)
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+        {
+            return None;
+        }
+    }
+    if let Some(secs) = duration {
+        let _ = fs::write(&dur_path, secs.to_string());
+    }
+    Some((thumb_path, duration))
+}
+
+struct ThumbQueue {
+    generation: u64,
+    jobs: VecDeque<(u64, String)>,
+    shutdown: bool,
+}
+
+struct ThumbWorker {
+    state: Arc<(Mutex<ThumbQueue>, Condvar)>,
+    out: Arc<Mutex<io::Stdout>>,
+    cache_dir: PathBuf,
+    threads: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl ThumbWorker {
+    fn new(out: Arc<Mutex<io::Stdout>>, cache_dir: PathBuf) -> Self {
+        Self {
+            state: Arc::new((
+                Mutex::new(ThumbQueue {
+                    generation: 0,
+                    jobs: VecDeque::new(),
+                    shutdown: false,
+                }),
+                Condvar::new(),
+            )),
+            out,
+            cache_dir,
+            threads: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn ensure_started(&self) {
+        let mut threads = self.threads.lock().unwrap();
+        if !threads.is_empty() {
+            return;
+        }
+        for _ in 0..3 {
+            let state = Arc::clone(&self.state);
+            let out = Arc::clone(&self.out);
+            let cache_dir = self.cache_dir.clone();
+            threads.push(thread::spawn(move || loop {
+                let (job_gen, path) = {
+                    let (lock, cvar) = &*state;
+                    let mut guard = lock.lock().unwrap();
+                    while guard.jobs.is_empty() && !guard.shutdown {
+                        guard = cvar.wait(guard).unwrap();
+                    }
+                    if guard.shutdown {
+                        return;
+                    }
+                    let Some(job) = guard.jobs.pop_front() else {
+                        continue;
+                    };
+                    if job.0 != guard.generation {
+                        continue;
+                    }
+                    job
+                };
+                if let Some((thumb_path, duration)) = generate_video_thumb_in(&path, &cache_dir) {
+                    let still_current = {
+                        let guard = state.0.lock().unwrap();
+                        !guard.shutdown && guard.generation == job_gen
+                    };
+                    if still_current {
+                        if let Some(thumb_str) = thumb_path.to_str() {
+                            let payload = event(
+                                "fs.videoThumb",
+                                json!({
+                                    "generation": job_gen,
+                                    "path": path,
+                                    "thumbPath": thumb_str,
+                                    "duration": duration.unwrap_or(0)
+                                }),
+                            );
+                            if let Ok(mut guard) = out.lock() {
+                                let _ = emit(&mut *guard, &payload);
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+    }
+
+    fn enqueue(&self, generation: u64, paths: Vec<String>) -> usize {
+        if !paths.is_empty() {
+            self.ensure_started();
+        }
+        let (lock, cvar) = &*self.state;
+        let mut guard = lock.lock().unwrap();
+        guard.generation = generation;
+        guard.jobs.clear();
+        let mut queued = 0usize;
+        for p in paths.into_iter().take(MAX_VIDEO_THUMB_BATCH) {
+            let candidate = Path::new(&p);
+            if candidate.is_absolute() && is_video_path(candidate) {
+                guard.jobs.push_back((generation, p));
+                queued += 1;
+            }
+        }
+        cvar.notify_all();
+        queued
+    }
+}
+
+impl Drop for ThumbWorker {
+    fn drop(&mut self) {
+        {
+            let (lock, cvar) = &*self.state;
+            let mut guard = lock.lock().unwrap();
+            guard.shutdown = true;
+            guard.jobs.clear();
+            cvar.notify_all();
+        }
+        if let Ok(mut threads) = self.threads.lock() {
+            for handle in threads.drain(..) {
+                let _ = handle.join();
+            }
+        }
+    }
+}
+
+fn format_unix_mode(mode: u32) -> String {
+    let bits = mode & 0o777;
+    let mut s = String::with_capacity(9);
+    for shift in [6, 3, 0] {
+        let triad = (bits >> shift) & 0o7;
+        s.push(if triad & 4 != 0 { 'r' } else { '-' });
+        s.push(if triad & 2 != 0 { 'w' } else { '-' });
+        s.push(if triad & 1 != 0 { 'x' } else { '-' });
+    }
+    format!("{s} ({bits:04o})")
+}
+
+fn system_time_secs(res: io::Result<std::time::SystemTime>) -> i64 {
+    res.ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn stat_entry(data: &Value) -> Result<Value, String> {
+    let path_str = data
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or("path debe ser una cadena no vacía")?;
+    let raw_path = Path::new(path_str);
+    if !raw_path.is_absolute() {
+        return Err("path debe ser absoluto".into());
+    }
+    let sym_meta =
+        fs::symlink_metadata(raw_path).map_err(|e| format!("{path_str}: {e}"))?;
+    let is_symlink = sym_meta.file_type().is_symlink();
+    let link_target = if is_symlink {
+        fs::read_link(raw_path)
+            .ok()
+            .and_then(|p| p.to_str().map(str::to_string))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let meta = fs::metadata(raw_path).unwrap_or(sym_meta);
+    let canonical = fs::canonicalize(raw_path)
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| path_str.to_string());
+    let name = raw_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "/".to_string());
+    let parent = raw_path
+        .parent()
+        .and_then(Path::to_str)
+        .unwrap_or("")
+        .to_string();
+    let is_dir = meta.is_dir();
+    let is_file = meta.is_file();
+    let mut item_count = 0usize;
+    let mut dir_count = 0usize;
+    let mut file_count = 0usize;
+    if is_dir {
+        if let Ok(read) = fs::read_dir(raw_path) {
+            for item in read.flatten() {
+                item_count += 1;
+                if let Ok(m) = fs::metadata(item.path()) {
+                    if m.is_dir() {
+                        dir_count += 1;
+                    } else if m.is_file() {
+                        file_count += 1;
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        format_unix_mode(meta.permissions().mode())
+    };
+    #[cfg(not(unix))]
+    let permissions = if meta.permissions().readonly() {
+        "solo lectura".to_string()
+    } else {
+        "lectura y escritura".to_string()
+    };
+    Ok(json!({
+        "name": name,
+        "path": path_str,
+        "parent": parent,
+        "canonicalPath": canonical,
+        "isDir": is_dir,
+        "isFile": is_file,
+        "isSymlink": is_symlink,
+        "linkTarget": link_target,
+        "size": meta.len(),
+        "mtime": system_time_secs(meta.modified()),
+        "atime": system_time_secs(meta.accessed()),
+        "ctime": system_time_secs(meta.created()),
+        "permissions": permissions,
+        "readonly": meta.permissions().readonly(),
+        "itemCount": item_count,
+        "dirCount": dir_count,
+        "fileCount": file_count,
+    }))
+}
+
+fn parse_video_thumbs_request(data: &Value) -> Result<(u64, Vec<String>), String> {
+    let obj = data.as_object().ok_or("data debe ser un objeto")?;
+    let generation = obj.get("generation").and_then(Value::as_u64).unwrap_or(1);
+    let paths_val = obj
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or("paths debe ser un arreglo")?;
+    let mut paths = Vec::with_capacity(paths_val.len().min(MAX_VIDEO_THUMB_BATCH));
+    for item in paths_val.iter().take(MAX_VIDEO_THUMB_BATCH) {
+        let s = item
+            .as_str()
+            .ok_or("cada elemento de paths debe ser una cadena")?;
+        paths.push(s.to_string());
+    }
+    Ok((generation, paths))
+}
+
+fn handle_with_thumbs(line: &str, ping_count: &mut u64, thumbs: Option<&ThumbWorker>) -> Value {
     let result = (|| -> Result<Value, String> {
         let command: Value =
             serde_json::from_str(line).map_err(|e| format!("JSON inválido: {e}"))?;
@@ -706,6 +1117,28 @@ fn handle(line: &str, ping_count: &mut u64) -> Value {
                 "fs.places",
                 places(command.get("data").unwrap_or(&Value::Null))?,
             )),
+            Some("fs.stat") => Ok(event(
+                "fs.statResult",
+                stat_entry(command.get("data").unwrap_or(&Value::Null))?,
+            )),
+            Some("fs.videoThumbs") => {
+                let (generation, paths) =
+                    parse_video_thumbs_request(command.get("data").unwrap_or(&Value::Null))?;
+                let count = match thumbs {
+                    Some(worker) => worker.enqueue(generation, paths),
+                    None => paths
+                        .iter()
+                        .filter(|p| {
+                            let path = Path::new(p.as_str());
+                            path.is_absolute() && is_video_path(path)
+                        })
+                        .count(),
+                };
+                Ok(event(
+                    "fs.videoThumbsQueued",
+                    json!({"generation": generation, "count": count}),
+                ))
+            }
             Some(
                 kind @ ("fs.mkdir" | "fs.rename" | "fs.trash" | "fs.copy" | "fs.move"
                 | "fs.openTerminal"),
@@ -714,6 +1147,10 @@ fn handle(line: &str, ping_count: &mut u64) -> Value {
         }
     })();
     result.unwrap_or_else(|message| event("error", json!({"message": message})))
+}
+
+fn handle(line: &str, ping_count: &mut u64) -> Value {
+    handle_with_thumbs(line, ping_count, None)
 }
 
 fn emit(out: &mut impl Write, value: &Value) -> io::Result<()> {
@@ -742,15 +1179,34 @@ fn process_stream<R: BufRead, W: Write>(mut input: R, mut out: W) -> io::Result<
 }
 
 fn main() -> io::Result<()> {
-    let mut out = io::stdout().lock();
-    emit(
-        &mut out,
-        &event(
-            "app.ready",
-            json!({"name": "Explorer", "version": env!("CARGO_PKG_VERSION"), "engine": "rust"}),
-        ),
-    )?;
-    process_stream(io::stdin().lock(), &mut out)
+    let out = Arc::new(Mutex::new(io::stdout()));
+    {
+        let mut guard = out.lock().unwrap();
+        emit(
+            &mut *guard,
+            &event(
+                "app.ready",
+                json!({"name": "Explorer", "version": env!("CARGO_PKG_VERSION"), "engine": "rust"}),
+            ),
+        )?;
+    }
+    let thumbs = ThumbWorker::new(Arc::clone(&out), video_thumb_cache_dir());
+    let mut input = io::stdin().lock();
+    let mut ping_count = 0;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        if input.read_until(b'\n', &mut buf)? == 0 {
+            return Ok(());
+        }
+        let response = match std::str::from_utf8(&buf) {
+            Ok(line) if line.trim().is_empty() => continue,
+            Ok(line) => handle_with_thumbs(line, &mut ping_count, Some(&thumbs)),
+            Err(_) => event("error", json!({"message": "Entrada no es UTF-8 válida"})),
+        };
+        let mut guard = out.lock().unwrap();
+        emit(&mut *guard, &response)?;
+    }
 }
 
 #[cfg(test)]
@@ -1260,5 +1716,74 @@ mod tests {
         assert_eq!(result["skipped"], 2);
         assert_eq!(result["entries"].as_array().unwrap().len(), 4);
         assert!(list(&json!({"path":temp.0.join("missing")})).is_err());
+    }
+
+    #[test]
+    fn video_thumb_helpers_and_protocol() {
+        assert!(is_video_path(Path::new("/tmp/demo.MP4")));
+        assert!(is_video_path(Path::new("/tmp/clip.mkv")));
+        assert!(is_video_path(Path::new("/tmp/clip.webm")));
+        assert!(!is_video_path(Path::new("/tmp/photo.png")));
+        assert!(!is_video_path(Path::new("/tmp/noext")));
+
+        assert_eq!(
+            parse_ffmpeg_duration("  Duration: 01:18:20.90, start: 0.000000, bitrate: 6167 kb/s"),
+            Some(4700)
+        );
+        assert_eq!(
+            parse_ffmpeg_duration("  Duration: 00:00:08.50, start: 0.0"),
+            Some(8)
+        );
+        assert_eq!(parse_ffmpeg_duration("  Duration: N/A, bitrate: N/A"), None);
+
+        let k1 = video_thumb_key("/tmp/a.mp4", 100, 1700000000);
+        let k2 = video_thumb_key("/tmp/a.mp4", 100, 1700000000);
+        let k3 = video_thumb_key("/tmp/a.mp4", 101, 1700000000);
+        let k4 = video_thumb_key("/tmp/a.mp4", 100, 1700000001);
+        assert_eq!(k1.len(), 16);
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+        assert_ne!(k1, k4);
+
+        let mut pings = 0;
+        let ok = handle(
+            r#"{"version":2,"type":"fs.videoThumbs","data":{"generation":7,"paths":["/tmp/a.mp4","/tmp/b.png","rel.mp4"]}}"#,
+            &mut pings,
+        );
+        assert_eq!(ok["type"], "fs.videoThumbsQueued");
+        assert_eq!(ok["data"]["generation"], 7);
+        assert_eq!(ok["data"]["count"], 1);
+
+        let bad = handle(
+            r#"{"version":2,"type":"fs.videoThumbs","data":{"paths":"not-array"}}"#,
+            &mut pings,
+        );
+        assert_eq!(bad["type"], "error");
+    }
+
+    #[test]
+    fn stat_entry_reports_metadata_and_counts() {
+        let temp = Temp::new();
+        let sub = temp.0.join("carpeta");
+        fs::create_dir(&sub).unwrap();
+        let file = sub.join("nota.txt");
+        fs::write(&file, b"hola mundo").unwrap();
+        fs::create_dir(sub.join("interna")).unwrap();
+
+        let dir_stat = stat_entry(&json!({"path": sub})).unwrap();
+        assert_eq!(dir_stat["name"], "carpeta");
+        assert_eq!(dir_stat["isDir"], true);
+        assert_eq!(dir_stat["itemCount"], 2);
+        assert_eq!(dir_stat["dirCount"], 1);
+        assert_eq!(dir_stat["fileCount"], 1);
+
+        let file_stat = stat_entry(&json!({"path": file})).unwrap();
+        assert_eq!(file_stat["name"], "nota.txt");
+        assert_eq!(file_stat["isFile"], true);
+        assert_eq!(file_stat["size"], 10);
+        assert!(file_stat["permissions"].as_str().unwrap().contains('r'));
+
+        assert!(stat_entry(&json!({"path": "relative/path"})).is_err());
+        assert!(stat_entry(&json!({"path": temp.0.join("missing")})).is_err());
     }
 }

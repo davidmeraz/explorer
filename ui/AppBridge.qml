@@ -19,9 +19,13 @@ QtObject {
     property var places: []
     property string sortBy: "name"
     property bool sortDesc: false
+    property var videoThumbs: ({})
+    property int thumbGeneration: 0
+    property var entryInfo: null
     signal listingSucceeded()
     signal mutationSucceeded(string action, string sourcePath, string targetPath)
     signal statusNotice(string message)
+    signal entryInfoReady(var info)
     property var history: []
     property string pendingMode: ""
     function list(target, hidden, mode, sort, desc) {
@@ -57,6 +61,23 @@ QtObject {
     function loadPlaces() {
         if (!bridge.ready) return;
         backend.write(JSON.stringify({version: 2, type: "fs.places", data: {}}) + "\n");
+    }
+    function requestVideoThumbs(paths) {
+        if (!bridge.ready) return;
+        bridge.thumbGeneration += 1;
+        backend.write(JSON.stringify({
+            version: 2,
+            type: "fs.videoThumbs",
+            data: {generation: bridge.thumbGeneration, paths: paths || []}
+        }) + "\n");
+    }
+    function statEntry(targetPath) {
+        if (!bridge.ready || !targetPath) return;
+        backend.write(JSON.stringify({
+            version: 2,
+            type: "fs.stat",
+            data: {path: targetPath}
+        }) + "\n");
     }
     function home() { list("", showHidden, "navigate"); }
     function back() { if (history.length) list(history[history.length - 1], showHidden, "back"); }
@@ -97,10 +118,25 @@ QtObject {
             showHidden = data.showHidden;
             sortBy = data.sortBy || "name";
             sortDesc = Boolean(data.sortDesc);
+            if (moved) videoThumbs = ({});
             entries = items;
             skipped = data.skipped || 0;
             loading = false;
             listingSucceeded();
+        } else if (event.type === "fs.videoThumb") {
+            if (data.generation === bridge.thumbGeneration && typeof data.path === "string" && typeof data.thumbPath === "string") {
+                const next = Object.assign({}, bridge.videoThumbs);
+                next[data.path] = {
+                    thumbPath: data.thumbPath,
+                    duration: typeof data.duration === "number" ? data.duration : 0
+                };
+                bridge.videoThumbs = next;
+            }
+        } else if (event.type === "fs.videoThumbsQueued") {
+            // Confirmación silenciosa del encolado en segundo plano.
+        } else if (event.type === "fs.statResult") {
+            entryInfo = data;
+            entryInfoReady(data);
         } else if (event.type === "fs.places") {
             places = (data.places || []).filter(p => p && typeof p.path === "string" && typeof p.name === "string");
         } else if (event.type === "fs.mutated") {

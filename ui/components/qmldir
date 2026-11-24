@@ -6,6 +6,7 @@ GlassDialog 1.0 GlassDialog.qml
 GlassIcon 1.0 GlassIcon.qml
 GlassPanel 1.0 GlassPanel.qml
 GlassScrollBar 1.0 GlassScrollBar.qml
+GlassThumbnail 1.0 GlassThumbnail.qml
 GlassToolTip 1.0 GlassToolTip.qml
 MattePanel 1.0 MattePanel.qml
 WaterReflection 1.0 WaterReflection.qml

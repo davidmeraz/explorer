@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Tarjeta de carpeta o archivo en cuadrícula estilo cristal facetado Gema.
+// Tarjeta de carpeta, archivo o miniatura de imagen en cuadrícula con zoom fluido.
 ItemDelegate {
     id: tile
     required property string path
@@ -11,11 +11,19 @@ ItemDelegate {
     required property bool directory
     required property color itemAccent
     required property string langLabel
+    property bool imagePreview: false
+    property bool videoPreview: false
+    property string previewSourcePath: ""
+    property string durationLabel: ""
     property string detailText: ""
     property bool selected: false
     hoverEnabled: true
-    padding: 8
+    padding: tile.width < 112 ? 6 : 8
     Accessible.name: name
+
+    readonly property bool hasVisualPreview: tile.imagePreview || (tile.videoPreview && tile.previewSourcePath.length > 0)
+    readonly property int labelFontSize: tile.width < 112 ? 11 : (tile.width > 210 ? 13 : 12)
+    readonly property int labelBoxHeight: tile.width < 112 ? 30 : (tile.width > 210 ? 38 : 34)
 
     scale: tile.down ? 0.975 : (tile.hovered ? 1.015 : 1.0)
     Behavior on scale { NumberAnimation { duration: GemaTheme.animations ? 130 : 0; easing.type: Easing.OutCubic } }
@@ -36,7 +44,7 @@ ItemDelegate {
     readonly property string badgeIcon: tile.directory ? folderBadgeIcon(tile.name) : ""
 
     background: GlassPanel {
-        radius: 14
+        radius: tile.width < 112 ? 11 : 14
         reflective: true
         topColor: tile.selected
                   ? GemaTheme.accentAlpha(0.28)
@@ -63,17 +71,20 @@ ItemDelegate {
     }
 
     contentItem: Item {
-        // Indicador sutil en esquina superior derecha cuando está seleccionado.
+        // Indicador de selección en esquina superior derecha.
         Rectangle {
+            z: 3
             visible: tile.selected
             anchors.top: parent.top
             anchors.right: parent.right
-            anchors.topMargin: 2
-            anchors.rightMargin: 2
-            width: 16
-            height: 16
-            radius: 8
-            color: GemaTheme.accentAlpha(0.92)
+            anchors.topMargin: 3
+            anchors.rightMargin: 3
+            width: 18
+            height: 18
+            radius: 9
+            color: GemaTheme.accentAlpha(0.95)
+            border.width: 1
+            border.color: "#8810141e"
             GlassIcon {
                 anchors.centerIn: parent
                 name: "check"
@@ -85,228 +96,324 @@ ItemDelegate {
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.topMargin: 10
-            anchors.bottomMargin: 4
-            spacing: 8
+            spacing: tile.width < 112 ? 5 : 7
 
-            // Icono vectorial grande: carpeta esmerilada con hojas o documento de cristal.
+            // Área visual superior: miniatura real para imágenes/vídeos o arte de cristal escalable.
             Item {
-                Layout.alignment: Qt.AlignHCenter
-                Layout.preferredWidth: 64
-                Layout.preferredHeight: 54
+                id: previewHost
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.topMargin: tile.hasVisualPreview ? 0 : 4
 
-                // Halo ambiental suave detrás del icono.
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: tile.directory ? 60 : 50
-                    height: tile.directory ? 44 : 50
-                    radius: 18
-                    color: tile.itemAccent
-                    opacity: tile.selected ? 0.28 : (tile.hovered ? 0.18 : 0.07)
-                    Behavior on opacity { NumberAnimation { duration: GemaTheme.animDuration } }
+                readonly property real artworkScale: Math.max(
+                    0.74,
+                    Math.min(1.95, Math.min((previewHost.width - 8) / 64.0, (previewHost.height - 4) / 54.0))
+                )
+                readonly property int playBadgeSize: Math.max(24, Math.min(44, Math.round(Math.min(previewHost.width, previewHost.height) * 0.36)))
+
+                // === MINIATURA DE IMAGEN O VÍDEO ===
+                GlassThumbnail {
+                    id: thumbPreview
+                    visible: tile.hasVisualPreview
+                    anchors.fill: parent
+                    filePath: tile.hasVisualPreview ? (tile.previewSourcePath.length > 0 ? tile.previewSourcePath : tile.path) : ""
+                    cornerRadius: tile.width < 112 ? 7 : 10
+                    decodeSize: 320
                 }
 
-                // === CARPETA DE CRISTAL ===
+                // Insignia central de reproducción translúcida para vídeos.
+                Rectangle {
+                    visible: tile.videoPreview && thumbPreview.ready
+                    anchors.centerIn: parent
+                    width: previewHost.playBadgeSize
+                    height: previewHost.playBadgeSize
+                    radius: width / 2
+                    color: tile.hovered || tile.selected ? "#c80d111b" : "#9c0b0f18"
+                    border.width: 1
+                    border.color: tile.hovered || tile.selected ? GemaTheme.accentAlpha(0.82) : "#62ffffff"
+                    scale: tile.hovered ? 1.08 : 1.0
+                    Behavior on scale { NumberAnimation { duration: GemaTheme.animations ? 140 : 0; easing.type: Easing.OutCubic } }
+                    Behavior on color { ColorAnimation { duration: GemaTheme.animDuration } }
+
+                    GlassIcon {
+                        anchors.centerIn: parent
+                        anchors.horizontalCenterOffset: 1
+                        name: "play"
+                        size: Math.max(11, Math.round(previewHost.playBadgeSize * 0.44))
+                        strokeWidth: 1.6
+                        color: "#ffffff"
+                    }
+                }
+
+                // Etiqueta de formato en esquina superior izquierda en tarjetas grandes de vídeo.
+                Rectangle {
+                    visible: tile.videoPreview && thumbPreview.ready && tile.durationLabel.length > 0 && (tile.hovered || tile.width >= 160)
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.leftMargin: 5
+                    anchors.topMargin: 5
+                    implicitWidth: videoFmtLabel.implicitWidth + 8
+                    implicitHeight: 15
+                    radius: 4.5
+                    color: "#b40c101a"
+                    border.width: 1
+                    border.color: "#38ffffff"
+
+                    Text {
+                        id: videoFmtLabel
+                        anchors.centerIn: parent
+                        text: tile.langLabel
+                        color: "#e6ecf5"
+                        font.family: "monospace"
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                    }
+                }
+
+                // Etiqueta inferior derecha: duración en vídeos o formato en imágenes.
+                Rectangle {
+                    visible: tile.hasVisualPreview && thumbPreview.ready && (tile.width >= 102 || tile.durationLabel.length > 0)
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.rightMargin: 5
+                    anchors.bottomMargin: 5
+                    implicitWidth: thumbExtLabel.implicitWidth + 10
+                    implicitHeight: tile.durationLabel.length > 0 ? 17 : 15
+                    radius: 4.5
+                    color: tile.durationLabel.length > 0 ? "#d40b0e18" : "#c20c101a"
+                    border.width: 1
+                    border.color: tile.durationLabel.length > 0
+                                  ? "#44ffffff"
+                                  : Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.58)
+                    opacity: tile.hovered || tile.selected || tile.durationLabel.length > 0 ? 0.96 : 0.80
+                    Behavior on opacity { NumberAnimation { duration: GemaTheme.animDuration } }
+
+                    Text {
+                        id: thumbExtLabel
+                        anchors.centerIn: parent
+                        text: tile.durationLabel.length > 0 ? tile.durationLabel : tile.langLabel
+                        color: tile.durationLabel.length > 0 ? "#f4f6fa" : tile.itemAccent
+                        font.family: "monospace"
+                        font.pixelSize: tile.durationLabel.length > 0 ? 9 : 8
+                        font.weight: Font.Bold
+                    }
+                }
+
+                // === ARTE DE CRISTAL (carpetas, documentos y fallback mientras carga miniatura) ===
                 Item {
                     anchors.centerIn: parent
-                    width: 60
-                    height: 48
-                    visible: tile.directory
+                    width: 64
+                    height: 54
+                    visible: !tile.hasVisualPreview || !thumbPreview.ready
+                    scale: previewHost.artworkScale
+                    transformOrigin: Item.Center
 
-                    // Pestaña superior de la carpeta.
+                    // Halo ambiental suave detrás del icono.
                     Rectangle {
-                        x: 3
-                        y: 3
-                        width: 24
-                        height: 11
-                        radius: 4.5
-                        color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.64)
-                        border.width: 1
-                        border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.88)
+                        anchors.centerIn: parent
+                        width: tile.directory ? 60 : 50
+                        height: tile.directory ? 44 : 50
+                        radius: 18
+                        color: tile.itemAccent
+                        opacity: tile.selected ? 0.28 : (tile.hovered ? 0.18 : 0.07)
+                        Behavior on opacity { NumberAnimation { duration: GemaTheme.animDuration } }
                     }
 
-                    // Fondo posterior de la carpeta.
-                    Rectangle {
-                        x: 3
-                        y: 9
-                        width: 54
-                        height: 36
-                        radius: 8
-                        color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.34)
-                        border.width: 1
-                        border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.72)
-                    }
+                    // === CARPETA DE CRISTAL ===
+                    Item {
+                        anchors.centerIn: parent
+                        width: 60
+                        height: 48
+                        visible: tile.directory
 
-                    // Hoja interior trasera (asoma al pasar el cursor).
-                    Rectangle {
-                        x: 11
-                        y: tile.hovered ? 6 : 10
-                        width: 38
-                        height: 14
-                        radius: 3.5
-                        color: "#36ffffff"
-                        border.width: 1
-                        border.color: "#52ffffff"
-                        Behavior on y { NumberAnimation { duration: GemaTheme.animations ? 160 : 0; easing.type: Easing.OutCubic } }
-                    }
-
-                    // Hoja interior frontal.
-                    Rectangle {
-                        x: 8
-                        y: tile.hovered ? 9 : 12
-                        width: 44
-                        height: 16
-                        radius: 3.5
-                        color: "#54f4f8ff"
-                        border.width: 1
-                        border.color: "#7cffffff"
-                        Behavior on y { NumberAnimation { duration: GemaTheme.animations ? 160 : 0; easing.type: Easing.OutCubic } }
-                    }
-
-                    // Solapa frontal esmerilada con reflejo especular y emblema grabado.
-                    Rectangle {
-                        x: 2
-                        y: 16
-                        width: 56
-                        height: 29
-                        radius: 8
-                        border.width: 1
-                        border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.92)
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.58) }
-                            GradientStop { position: 1.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.28) }
+                        Rectangle {
+                            x: 3
+                            y: 3
+                            width: 24
+                            height: 11
+                            radius: 4.5
+                            color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.64)
+                            border.width: 1
+                            border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.88)
                         }
 
-                        // Destello especular en el canto superior.
                         Rectangle {
-                            anchors.top: parent.top
-                            anchors.topMargin: 1
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.leftMargin: 7
-                            anchors.rightMargin: 7
-                            height: 1
+                            x: 3
+                            y: 9
+                            width: 54
+                            height: 36
+                            radius: 8
+                            color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.34)
+                            border.width: 1
+                            border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.72)
+                        }
+
+                        Rectangle {
+                            x: 11
+                            y: tile.hovered ? 6 : 10
+                            width: 38
+                            height: 14
+                            radius: 3.5
+                            color: "#36ffffff"
+                            border.width: 1
+                            border.color: "#52ffffff"
+                            Behavior on y { NumberAnimation { duration: GemaTheme.animations ? 160 : 0; easing.type: Easing.OutCubic } }
+                        }
+
+                        Rectangle {
+                            x: 8
+                            y: tile.hovered ? 9 : 12
+                            width: 44
+                            height: 16
+                            radius: 3.5
+                            color: "#54f4f8ff"
+                            border.width: 1
+                            border.color: "#7cffffff"
+                            Behavior on y { NumberAnimation { duration: GemaTheme.animations ? 160 : 0; easing.type: Easing.OutCubic } }
+                        }
+
+                        Rectangle {
+                            x: 2
+                            y: 16
+                            width: 56
+                            height: 29
+                            radius: 8
+                            border.width: 1
+                            border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.92)
                             gradient: Gradient {
-                                orientation: Gradient.Horizontal
-                                GradientStop { position: 0.0; color: "#00ffffff" }
-                                GradientStop { position: 0.35; color: "#a4ffffff" }
-                                GradientStop { position: 1.0; color: "#00ffffff" }
+                                GradientStop { position: 0.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.58) }
+                                GradientStop { position: 1.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.28) }
+                            }
+
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.topMargin: 1
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.leftMargin: 7
+                                anchors.rightMargin: 7
+                                height: 1
+                                gradient: Gradient {
+                                    orientation: Gradient.Horizontal
+                                    GradientStop { position: 0.0; color: "#00ffffff" }
+                                    GradientStop { position: 0.35; color: "#a4ffffff" }
+                                    GradientStop { position: 1.0; color: "#00ffffff" }
+                                }
+                            }
+
+                            GlassIcon {
+                                visible: tile.badgeIcon.length > 0
+                                anchors.centerIn: parent
+                                anchors.verticalCenterOffset: 1
+                                name: tile.badgeIcon
+                                size: 14
+                                strokeWidth: 1.9
+                                color: "#c8ffffff"
+                            }
+                            Rectangle {
+                                visible: tile.badgeIcon.length === 0
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                y: 10
+                                width: 18
+                                height: 2
+                                radius: 1
+                                color: "#52ffffff"
                             }
                         }
-
-                        // Emblema grabado sutil para carpetas conocidas, o muesca minimalista.
-                        GlassIcon {
-                            visible: tile.badgeIcon.length > 0
-                            anchors.centerIn: parent
-                            anchors.verticalCenterOffset: 1
-                            name: tile.badgeIcon
-                            size: 14
-                            strokeWidth: 1.9
-                            color: "#c8ffffff"
-                        }
-                        Rectangle {
-                            visible: tile.badgeIcon.length === 0
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            y: 10
-                            width: 18
-                            height: 2
-                            radius: 1
-                            color: "#52ffffff"
-                        }
                     }
-                }
 
-                // === ARCHIVO DE CRISTAL ===
-                Item {
-                    anchors.centerIn: parent
-                    width: 46
-                    height: 52
-                    visible: !tile.directory
-
-                    Rectangle {
-                        x: 2
-                        y: 1
-                        width: 42
-                        height: 50
-                        radius: 8
-                        border.width: 1
-                        border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b,
-                                              tile.selected || tile.hovered ? 0.90 : 0.65)
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.28) }
-                            GradientStop { position: 1.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.10) }
-                        }
+                    // === ARCHIVO DE CRISTAL ===
+                    Item {
+                        anchors.centerIn: parent
+                        width: 46
+                        height: 52
+                        visible: !tile.directory
 
                         Rectangle {
-                            anchors.top: parent.top
-                            anchors.topMargin: 1
-                            anchors.left: parent.left
-                            anchors.leftMargin: 6
-                            width: 22
-                            height: 1
-                            color: "#72ffffff"
-                        }
-
-                        Rectangle {
-                            anchors.top: parent.top
-                            anchors.right: parent.right
-                            width: 11
-                            height: 11
-                            radius: 3
-                            color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.44)
+                            x: 2
+                            y: 1
+                            width: 42
+                            height: 50
+                            radius: 8
                             border.width: 1
-                            border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.74)
-                        }
+                            border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b,
+                                                  tile.selected || tile.hovered ? 0.90 : 0.65)
+                            gradient: Gradient {
+                                GradientStop { position: 0.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.28) }
+                                GradientStop { position: 1.0; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.10) }
+                            }
 
-                        Column {
-                            x: 7
-                            y: 11
-                            spacing: 4
-                            Rectangle { width: 16; height: 2; radius: 1; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.82) }
-                            Rectangle { width: 26; height: 2; radius: 1; color: "#58ffffff" }
-                            Rectangle { width: 20; height: 2; radius: 1; color: "#40ffffff" }
-                        }
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.topMargin: 1
+                                anchors.left: parent.left
+                                anchors.leftMargin: 6
+                                width: 22
+                                height: 1
+                                color: "#72ffffff"
+                            }
 
-                        Rectangle {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            anchors.bottom: parent.bottom
-                            anchors.bottomMargin: 5
-                            implicitWidth: Math.min(36, fileTypeLabel.implicitWidth + 8)
-                            implicitHeight: 15
-                            radius: 4.5
-                            color: "#ba0d121d"
-                            border.width: 1
-                            border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.74)
-                            Text {
-                                id: fileTypeLabel
-                                anchors.centerIn: parent
-                                text: tile.langLabel
-                                color: tile.itemAccent
-                                font.family: "monospace"
-                                font.pixelSize: 8
-                                font.weight: Font.Bold
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.right: parent.right
+                                width: 11
+                                height: 11
+                                radius: 3
+                                color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.44)
+                                border.width: 1
+                                border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.74)
+                            }
+
+                            Column {
+                                x: 7
+                                y: 11
+                                spacing: 4
+                                Rectangle { width: 16; height: 2; radius: 1; color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.82) }
+                                Rectangle { width: 26; height: 2; radius: 1; color: "#58ffffff" }
+                                Rectangle { width: 20; height: 2; radius: 1; color: "#40ffffff" }
+                            }
+
+                            Rectangle {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 5
+                                implicitWidth: Math.min(36, fileTypeLabel.implicitWidth + 8)
+                                implicitHeight: 15
+                                radius: 4.5
+                                color: "#ba0d121d"
+                                border.width: 1
+                                border.color: Qt.rgba(tile.itemAccent.r, tile.itemAccent.g, tile.itemAccent.b, 0.74)
+                                Text {
+                                    id: fileTypeLabel
+                                    anchors.centerIn: parent
+                                    text: tile.langLabel
+                                    color: tile.itemAccent
+                                    font.family: "monospace"
+                                    font.pixelSize: 8
+                                    font.weight: Font.Bold
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Nombre centrado en hasta 2 líneas con elipsis limpia.
+            // Nombre centrado en hasta 2 líneas con altura estable.
             Text {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
+                Layout.preferredHeight: tile.labelBoxHeight
                 Layout.leftMargin: 2
                 Layout.rightMargin: 2
                 text: tile.name
                 textFormat: Text.PlainText
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignTop
-                wrapMode: Text.Wrap
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideRight
                 color: tile.selected ? (GemaTheme.darkText ? GemaTheme.accentInk : "#ffffff") : GemaTheme.textColor
                 opacity: tile.selected || tile.hovered ? 1.0 : 0.92
-                font.pixelSize: 12
+                font.pixelSize: tile.labelFontSize
                 font.weight: tile.selected ? Font.DemiBold : Font.Medium
                 style: GemaTheme.darkText ? Text.Normal : Text.Raised
                 styleColor: "#58000000"

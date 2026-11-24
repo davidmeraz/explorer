@@ -106,6 +106,10 @@ Item {
             return '<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>';
         case "link":
             return '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>';
+        case "play":
+            return '<polygon points="7.5 4.8 19.5 12 7.5 19.2 7.5 4.8" fill="currentColor"/>';
+        case "info":
+            return '<circle cx="12" cy="12" r="9.5"/><path d="M12 16v-4"/><circle cx="12" cy="8.2" r="0.6" fill="currentColor"/>';
         default:
             return "";
         }
@@ -123,7 +127,8 @@ Item {
         sourceSize: Qt.size(Math.max(24, root.size * 2), Math.max(24, root.size * 2))
         source: root.svgBody.length > 0
                 ? "data:image/svg+xml;utf8," + encodeURIComponent(
-                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="'
+                      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" color="'
+                      + root.strokeHex + '" fill="none" stroke="'
                       + root.strokeHex + '" stroke-width="' + root.strokeWidth
                       + '" stroke-linecap="round" stroke-linejoin="round">'
                       + root.svgBody + '</svg>')
