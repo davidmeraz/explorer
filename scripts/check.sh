@@ -27,4 +27,28 @@ try:
     assert all(type(e["mtime"]) is int for e in listing["data"]["entries"])
 except (ValueError, KeyError, TypeError, AssertionError) as exc:
     sys.exit("Respuesta IPC inválida: " + str(exc))' "$response"
+python3 - "$app_root/backend/target/release/gema-backend" <<'PY'
+import json, os, pathlib, subprocess, sys, tempfile
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    data = root / 'data'
+    data.mkdir()
+    env = dict(os.environ, XDG_DATA_HOME=str(data))
+    proc = subprocess.Popen([sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
+    assert json.loads(proc.stdout.readline())['type'] == 'app.ready'
+    def request(kind, data):
+        proc.stdin.write(json.dumps({'version': 2, 'type': kind, 'data': data}) + '\n')
+        proc.stdin.flush()
+        result = json.loads(proc.stdout.readline())
+        assert result['type'] == 'fs.mutated', result
+        return result['data']
+    request('fs.mkdir', {'parent': tmp, 'name': 'uno'})
+    request('fs.rename', {'path': str(root / 'uno'), 'newName': 'dos'})
+    copy = request('fs.copy', {'source': str(root / 'dos'), 'destDir': tmp})
+    trashed = request('fs.trash', {'path': copy['targetPath']})
+    assert pathlib.Path(trashed['targetPath']).is_dir()
+    assert list((data / 'Trash' / 'info').glob('*.trashinfo'))
+    proc.stdin.close()
+    assert proc.wait(timeout=10) == 0
+PY
 echo "Explorer: QML, pruebas Rust e IPC verificados."

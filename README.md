@@ -19,6 +19,18 @@ incluyendo entradas con `mtime` en segundos Unix y los criterios aplicados.
 `fs.places` acepta `data` omitido, nulo o un objeto, y responde con `fs.places`
 y su lista `places` de nombre, ruta y tipo (`name`, `path`, `kind`).
 
+Operaciones v2: `fs.mkdir` (`parent`, `name`), `fs.rename` (`path`, `newName`),
+`fs.trash` (`path`), `fs.copy` y `fs.move` (`source`, `destDir`) responden
+`fs.mutated` con la acción y rutas afectadas. `fs.openTerminal` (`path`)
+responde `fs.terminalOpened`. Los errores responden `error` con `message`.
+
+Las operaciones CRUD permiten nueva carpeta, renombrar, enviar a la papelera
+Freedesktop XDG, copiar, cortar y pegar. El menú contextual ofrece también copiar
+la ruta y abrir una terminal aquí. `fs.copy` resuelve colisiones con sufijos
+`(copia)`; `fs.move` y `fs.rename` rechazan destinos existentes sin sobrescribir.
+Se evitan ciclos de carpetas; la papelera usa `$XDG_DATA_HOME/Trash` o
+`$HOME/.local/share/Trash`.
+
 ## Requisitos en Arch
 
 - Una sesión Wayland (por ejemplo, Hyprland) y Quickshell disponible como `qs`. Quickshell puede instalarse desde AUR como `quickshell-git` o desde otra fuente compatible; no se presupone que esté en los repositorios oficiales habilitados.
@@ -41,7 +53,7 @@ El motor se compila en modo release al iniciarse solo si falta el binario o hay 
 
 ## Interfaz y procedencia
 
-Smoke opcional de la UI real en una sesión Wayland (requiere `qs`, el módulo QML `QtTest`, `timeout` y el backend compilable): `bash scripts/smoke-wayland.sh`. Usa HOME y configuración temporales con una carpeta y un archivo de prueba; comprueba los delegates, clic en lista, selección y foco al cambiar de vista y navegación con Enter, sin abrir archivos externos. Sale con error si falla la comprobación o vence el tiempo.
+Smoke opcional de la UI real en una sesión Wayland (requiere `qs`, el módulo QML `QtTest`, `timeout` y el backend compilable): `bash scripts/smoke-wayland.sh`. Usa HOME y configuración temporales y aísla también `XDG_DATA_HOME` para la papelera temporal, con una carpeta y un archivo de prueba; comprueba los delegates, clic en lista, selección y foco al cambiar de vista y navegación con Enter, sin abrir archivos externos. Sale con error si falla la comprobación o vence el tiempo.
 
 La cuadrícula de tarjetas grandes es la vista inicial; los botones permiten cambiar a lista. Un clic selecciona, doble clic o Enter abre, y las migas permiten navegar a cualquier carpeta antecesora. El botón de edición o un clic en la barra de migas permite editar la ruta. Se conservan el historial, la edición de ruta, el refresco y la opción de mostrar ocultos. Los documentos muestran etiqueta y color según su extensión.
 
@@ -85,6 +97,8 @@ Usa la ruta real del wrapper mostrada por el instalador; consulta la sintaxis de
 - `Ctrl+F`: enfocar la búsqueda local por subcadena de nombre, sin distinguir mayúsculas. Escape o «Limpiar búsqueda» la vacían. Se conserva al refrescar o ante errores y se limpia al cambiar de carpeta correctamente; el contador indica coincidencias y total.
 - `Ctrl+1`: cuadrícula de iconos grandes.
 - `Ctrl+2`: lista.
+- `Ctrl+Shift+N`: nueva carpeta; `F2`: renombrar; `Del`: papelera.
+- `Ctrl+C`, `Ctrl+X`, `Ctrl+V`: copiar, cortar y pegar.
 
 - `F5`: actualizar la carpeta.
 - `Enter` en la cuadrícula o lista: abrir la entrada seleccionada; flechas para seleccionarla.

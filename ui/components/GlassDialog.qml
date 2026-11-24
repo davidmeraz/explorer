@@ -1,9 +1,11 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 
 // Diálogo modal Matte Transparent Glassmorphism de Gema UI Kit.
 Dialog {
     id: control
+    modal: true
     padding: 20
     background: MattePanel {
         overlay: true
@@ -20,6 +22,7 @@ Dialog {
         elide: Text.ElideRight
     }
     footer: DialogButtonBox {
+        visible: control.standardButtons !== Dialog.NoButton
         standardButtons: control.standardButtons
         padding: 16
         spacing: 8

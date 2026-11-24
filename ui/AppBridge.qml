@@ -8,6 +8,8 @@ QtObject {
     property string appName: "Explorer"
     property string appVersion: "0.1.0"
     property bool loading: false
+    property bool mutating: false
+    readonly property bool busy: loading || mutating
     property string error: ""
     property string path: ""
     property string parentPath: ""
@@ -18,21 +20,39 @@ QtObject {
     property string sortBy: "name"
     property bool sortDesc: false
     signal listingSucceeded()
+    signal mutationSucceeded(string action, string sourcePath, string targetPath)
+    signal statusNotice(string message)
     property var history: []
     property string pendingMode: ""
     function list(target, hidden, mode, sort, desc) {
-        if (!ready || loading) return;
+        if (!ready || loading || mutating) return;
         loading = true;
         error = "";
         pendingMode = mode || "navigate";
         backend.write(JSON.stringify({version: 2, type: "fs.list", data: {path: target, showHidden: hidden, sortBy: sort === undefined ? bridge.sortBy : sort, sortDesc: desc === undefined ? bridge.sortDesc : desc}}) + "\n");
     }
     property var forwardHistory: []
-    readonly property bool canBack: ready && !loading && history.length > 0
-    readonly property bool canForward: ready && !loading && forwardHistory.length > 0
+    readonly property bool canBack: ready && !busy && history.length > 0
+    readonly property bool canForward: ready && !busy && forwardHistory.length > 0
     function setSort(nextSortBy, nextSortDesc) {
         if (bridge.path) bridge.list(bridge.path, bridge.showHidden, "refresh", nextSortBy, nextSortDesc);
         else { bridge.sortBy = nextSortBy; bridge.sortDesc = nextSortDesc; }
+    }
+    function sendMutation(type, data) {
+        mutating = true;
+        error = "";
+        backend.write(JSON.stringify({version: 2, type: type, data: data}) + "\n");
+    }
+    function mkdir(parent, name) { if (!ready || busy) return; sendMutation("fs.mkdir", {parent: parent, name: name}); }
+    function renameEntry(path, newName) { if (!ready || busy) return; sendMutation("fs.rename", {path: path, newName: newName}); }
+    function trashEntry(path) { if (!ready || busy) return; sendMutation("fs.trash", {path: path}); }
+    function copyEntry(source, destDir) { if (!ready || busy) return; sendMutation("fs.copy", {source: source, destDir: destDir}); }
+    function moveEntry(source, destDir) { if (!ready || busy) return; sendMutation("fs.move", {source: source, destDir: destDir}); }
+    function openTerminal(dirPath) {
+        if (!ready || busy || !dirPath) return;
+        mutating = true;
+        error = "";
+        backend.write(JSON.stringify({version: 2, type: "fs.openTerminal", data: {path: dirPath}}) + "\n");
     }
     function loadPlaces() {
         if (!bridge.ready) return;
@@ -48,6 +68,7 @@ QtObject {
             if (event.version !== 2 || !event.data || typeof event.type !== "string") throw new Error("Formato incompatible");
         } catch (e) {
             loading = false;
+            mutating = false;
             error = "Error de comunicación: " + e.message;
             return;
         }
@@ -82,9 +103,19 @@ QtObject {
             listingSucceeded();
         } else if (event.type === "fs.places") {
             places = (data.places || []).filter(p => p && typeof p.path === "string" && typeof p.name === "string");
+        } else if (event.type === "fs.mutated") {
+            mutating = false;
+            mutationSucceeded(data.action || "", data.path || "", data.targetPath || data.path || "");
+            const refreshTarget = bridge.path || data.parent || "";
+            if (refreshTarget) list(refreshTarget, showHidden, "refresh");
+            if (data.action === "trash") loadPlaces();
+        } else if (event.type === "fs.terminalOpened") {
+            mutating = false;
+            statusNotice("Terminal abierto (" + (data.terminal || "terminal") + ")");
         } else if (event.type === "error") {
             loading = false;
-            error = data.message || "No se pudo abrir la carpeta.";
+            mutating = false;
+            error = data.message || "No se pudo completar la operación.";
         }
     }
     readonly property Process backend: Process {
@@ -97,6 +128,7 @@ QtObject {
         onExited: (exitCode, exitStatus) => {
             bridge.ready = false;
             bridge.loading = false;
+            bridge.mutating = false;
             bridge.error = "Motor desconectado (" + exitCode + ").";
         }
     }

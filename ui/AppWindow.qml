@@ -26,6 +26,80 @@ FloatingWindow {
     readonly property alias placesView: placesList
     property bool sidebarOpen: true
     property bool sidebarManual: false
+    property string clipboardPath: ""
+    property string clipboardName: ""
+    property string clipboardMode: ""
+    property string statusMessage: ""
+    property var contextEntry: null
+    readonly property bool modalOpen: mkdirDialog.visible || renameDialog.visible || trashDialog.visible
+    readonly property bool textInputFocused: search.activeFocus || pathField.activeFocus || mkdirInput.activeFocus || renameInput.activeFocus
+    readonly property bool canMutate: window.bridge.ready && !window.bridge.busy && !window.textInputFocused && !window.modalOpen
+    Timer { id: statusTimer; interval: 3200; onTriggered: window.statusMessage = "" }
+    TextEdit { id: clipboardText; visible: false }
+    function showStatus(msg) {
+        window.statusMessage = msg;
+        statusTimer.restart();
+    }
+    function copyPath(p) {
+        clipboardText.text = p;
+        clipboardText.selectAll();
+        clipboardText.copy();
+        window.showStatus("Ruta copiada");
+    }
+    function selectedEntry() {
+        const i = window.gridMode ? grid.currentIndex : listing.currentIndex;
+        return i >= 0 && i < window.filteredEntries.length ? window.filteredEntries[i] : null;
+    }
+    function setClipboard(entry, mode) {
+        if (!entry) return;
+        window.clipboardPath = entry.path;
+        window.clipboardName = entry.name;
+        window.clipboardMode = mode;
+        window.showStatus(mode === "cut" ? "Cortado: " + entry.name : "Copiado: " + entry.name);
+    }
+    function pasteClipboard() {
+        if (window.clipboardPath === "" || window.bridge.path === "") return;
+        if (window.clipboardMode === "cut") window.bridge.moveEntry(window.clipboardPath, window.bridge.path);
+        else window.bridge.copyEntry(window.clipboardPath, window.bridge.path);
+    }
+    function validName(text) {
+        const t = text.trim();
+        return t.length > 0 && t !== "." && t !== ".." && !t.includes("/");
+    }
+    function openMkdirDialog() {
+        if (window.bridge.path === "") return;
+        mkdirDialog.open();
+    }
+    function openRenameDialog(entry) {
+        if (!entry) return;
+        renameDialog.targetEntry = entry;
+        renameDialog.open();
+    }
+    function openTrashDialog(entry) {
+        if (!entry) return;
+        trashDialog.targetEntry = entry;
+        trashDialog.open();
+    }
+    function openContextMenu(entry, targetItem, x, y) {
+        window.contextEntry = entry;
+        if (entry) entryMenu.popup(targetItem, x, y);
+        else folderMenu.popup(targetItem, x, y);
+    }
+    component GlassMenuItem: MenuItem {
+        id: glassItem
+        implicitWidth: 210
+        implicitHeight: 34
+        contentItem: Text {
+            text: glassItem.text
+            textFormat: Text.PlainText
+            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+            opacity: glassItem.enabled ? 1 : 0.5
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: 8
+            font.pixelSize: 13
+        }
+        background: Rectangle { radius: 8; color: glassItem.highlighted ? GemaTheme.accentAlpha(0.28) : "transparent" }
+    }
     onWidthChanged: { if (!window.sidebarManual) window.sidebarOpen = window.width >= 680; }
     function placeIcon(kind) {
         const icons = {home: "⌂", desktop: "◫", documents: "▤", downloads: "↓", pictures: "◩", music: "♪", videos: "▷", trash: "⌫", root: "/", mount: "⛁"};
@@ -57,7 +131,7 @@ FloatingWindow {
     }
     BackgroundEffect.blurRegion: Region { item: GemaTheme.blur ? surface : null; radius: surface.radius }
     function openEntry(entry) {
-        if (!entry || window.bridge.loading) return;
+        if (!entry || window.bridge.busy) return;
         window.uiError = "";
         if (entry.isDir) window.bridge.list(entry.path, window.bridge.showHidden, "navigate");
         else if (entry.isFile) {
@@ -124,14 +198,14 @@ FloatingWindow {
             ActionButton { id: sidebarBtn; text: "☰"; ToolTip.visible: sidebarBtn.hovered; ToolTip.text: "Lugares (Ctrl+B)"; onClicked: { window.sidebarManual = true; window.sidebarOpen = !window.sidebarOpen; } }
             ActionButton { text: "Atrás"; enabled: window.bridge.canBack; onClicked: window.bridge.back() }
             ActionButton { text: "Adelante"; enabled: window.bridge.canForward; onClicked: window.bridge.forward() }
-            ActionButton { text: "Inicio"; enabled: window.bridge.ready && !window.bridge.loading; onClicked: window.bridge.home() }
-            ActionButton { id: upBtn; text: "↑"; ToolTip.visible: upBtn.hovered; ToolTip.text: "Carpeta superior"; enabled: window.bridge.ready && !window.bridge.loading && window.bridge.parentPath !== "" && window.bridge.parentPath !== window.bridge.path; onClicked: window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate") }
+            ActionButton { text: "Inicio"; enabled: window.bridge.ready && !window.bridge.busy; onClicked: window.bridge.home() }
+            ActionButton { id: upBtn; text: "↑"; ToolTip.visible: upBtn.hovered; ToolTip.text: "Carpeta superior"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.parentPath !== "" && window.bridge.parentPath !== window.bridge.path; onClicked: window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate") }
             TextField {
                 id: pathField
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
                 visible: window.editingPath
-                enabled: window.bridge.ready && !window.bridge.loading
+                enabled: window.bridge.ready && !window.bridge.busy
                 selectByMouse: true
                 placeholderText: "Ruta absoluta"
                 text: window.bridge.path
@@ -160,12 +234,12 @@ FloatingWindow {
                     // Espacio vacío de la barra: clic para editar la ruta.
                     width: crumbsFlickable.contentWidth
                     height: crumbsFlickable.height
-                    enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""
+                    enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
                     onClicked: window.startEditPath()
                 }
                 Row {
                     id: crumbs
-                    ActionButton { text: "/"; enabled: window.bridge.ready && !window.bridge.loading; onClicked: window.bridge.list("/", window.bridge.showHidden, "navigate") }
+                    ActionButton { text: "/"; enabled: window.bridge.ready && !window.bridge.busy; onClicked: window.bridge.list("/", window.bridge.showHidden, "navigate") }
                     Repeater {
                         model: window.bridge.path.split("/").filter(s => s.length > 0)
                         ActionButton {
@@ -173,14 +247,16 @@ FloatingWindow {
                             required property string modelData
                             required property int index
                             text: "› " + crumb.modelData
-                            enabled: window.bridge.ready && !window.bridge.loading
+                            enabled: window.bridge.ready && !window.bridge.busy
                             onClicked: window.bridge.list("/" + window.bridge.path.split("/").filter(s => s.length > 0).slice(0, crumb.index + 1).join("/"), window.bridge.showHidden, "navigate")
                         }
                     }
                 }
             }
-            ActionButton { id: editBtn; text: "✎"; ToolTip.visible: editBtn.hovered; ToolTip.text: "Editar ruta (Ctrl+L)"; enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""; onClicked: window.startEditPath() }
-            ActionButton { id: refreshBtn; text: "↻"; ToolTip.visible: refreshBtn.hovered; ToolTip.text: "Actualizar"; enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""; onClicked: { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } }
+            ActionButton { id: editBtn; text: "✎"; ToolTip.visible: editBtn.hovered; ToolTip.text: "Editar ruta (Ctrl+L)"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: window.startEditPath() }
+            ActionButton { id: refreshBtn; text: "↻"; ToolTip.visible: refreshBtn.hovered; ToolTip.text: "Actualizar"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } }
+            ActionButton { id: newFolderBtn; text: "+"; horizontalPadding: 10; ToolTip.visible: newFolderBtn.hovered; ToolTip.text: "Nueva carpeta (Ctrl+Shift+N)"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: window.openMkdirDialog() }
+            ActionButton { id: termBtn; text: ">_"; horizontalPadding: 10; ToolTip.visible: termBtn.hovered; ToolTip.text: "Abrir terminal aquí"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""; onClicked: window.bridge.openTerminal(window.bridge.path) }
         }
         RowLayout {
             Layout.fillWidth: true
@@ -195,7 +271,7 @@ FloatingWindow {
                 textRole: "label"
                 valueRole: "key"
                 currentIndex: Math.max(0, sortCombo.indexOfValue(window.bridge.sortBy))
-                enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""
+                enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
                 onActivated: window.bridge.setSort(String(sortCombo.currentValue), window.bridge.sortDesc)
             }
             ActionButton {
@@ -203,7 +279,7 @@ FloatingWindow {
                 text: window.bridge.sortDesc ? "↓" : "↑"
                 ToolTip.visible: sortDirBtn.hovered
                 ToolTip.text: window.bridge.sortDesc ? "Orden descendente" : "Orden ascendente"
-                enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""
+                enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
                 onClicked: window.bridge.setSort(window.bridge.sortBy, !window.bridge.sortDesc)
             }
             ActionButton { text: "Cuadrícula"; enabled: !window.gridMode; onClicked: window.switchView(true) }
@@ -212,7 +288,7 @@ FloatingWindow {
                 id: hiddenCheck
                 text: "Mostrar ocultos"
                 checked: window.bridge.showHidden
-                enabled: window.bridge.ready && !window.bridge.loading && window.bridge.path !== ""
+                enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== ""
                 onClicked: window.bridge.list(window.bridge.path, hiddenCheck.checked, "refresh")
                 contentItem: Text { text: hiddenCheck.text; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; verticalAlignment: Text.AlignVCenter; leftPadding: hiddenCheck.indicator.width + 6; font.pixelSize: 12 }
             }
@@ -258,7 +334,7 @@ FloatingWindow {
                                 id: placeMouse
                                 anchors.fill: parent
                                 hoverEnabled: true
-                                enabled: window.bridge.ready && !window.bridge.loading
+                                enabled: window.bridge.ready && !window.bridge.busy
                                 onClicked: { window.uiError = ""; window.bridge.list(placeRow.modelData.path, window.bridge.showHidden, "navigate"); }
                             }
                         }
@@ -313,7 +389,25 @@ FloatingWindow {
                                 Text { text: row.modelData.isDir ? "Carpeta" : "Archivo"; Layout.preferredWidth: 85; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 12 }
                                 Text { text: row.modelData.isDir ? "—" : window.sizeText(row.modelData.size); Layout.preferredWidth: 75; horizontalAlignment: Text.AlignRight; color: GemaTheme.darkText ? "#263d50" : "#ffffff"; font.pixelSize: 12 }
                             }
-                            MouseArea { id: mouse; anchors.fill: parent; hoverEnabled: true; onClicked: { listing.currentIndex = row.index; listing.forceActiveFocus(); } onDoubleClicked: window.openEntry(row.modelData) }
+                            MouseArea {
+                                id: mouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                onClicked: (mouse) => {
+                                    listing.currentIndex = row.index;
+                                    listing.forceActiveFocus();
+                                    if (mouse.button === Qt.RightButton) window.openContextMenu(row.modelData, row, mouse.x, mouse.y);
+                                }
+                                onDoubleClicked: (mouse) => { if (mouse.button === Qt.LeftButton) window.openEntry(row.modelData); }
+                            }
+                        }
+                        MouseArea {
+                            z: -1
+                            parent: listing
+                            anchors.fill: parent
+                            acceptedButtons: Qt.RightButton
+                            onClicked: (mouse) => window.openContextMenu(null, listing, mouse.x, mouse.y)
                         }
                         Text {
                             anchors.centerIn: parent
@@ -352,6 +446,18 @@ FloatingWindow {
                             selected: grid.currentIndex === card.index
                             onClicked: { grid.currentIndex = card.index; grid.forceActiveFocus(); }
                             onDoubleClicked: window.openEntry(card.modelData)
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.RightButton
+                                onClicked: (mouse) => { grid.currentIndex = card.index; grid.forceActiveFocus(); window.openContextMenu(card.modelData, card, mouse.x, mouse.y); }
+                            }
+                        }
+                        MouseArea {
+                            z: -1
+                            parent: grid
+                            anchors.fill: parent
+                            acceptedButtons: Qt.RightButton
+                            onClicked: (mouse) => window.openContextMenu(null, grid, mouse.x, mouse.y)
                         }
                         Text {
                             anchors.centerIn: parent
@@ -366,7 +472,7 @@ FloatingWindow {
         Text {
             Layout.fillWidth: true
             Layout.minimumWidth: 0
-            text: (window.bridge.error || window.uiError) ? (window.bridge.error || window.uiError) : (window.bridge.loading ? "Cargando…" : window.filteredEntries.length + " elementos" + (search.text ? " de " + window.bridge.entries.length + " · búsqueda activa" : "") + (window.bridge.skipped ? " · " + window.bridge.skipped + (window.bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : ""))
+            text: (window.bridge.error || window.uiError || window.statusMessage) ? (window.bridge.error || window.uiError || window.statusMessage) : (window.bridge.loading ? "Cargando…" : (window.bridge.mutating ? "Procesando…" : window.filteredEntries.length + " elementos" + (search.text ? " de " + window.bridge.entries.length + " · búsqueda activa" : "") + (window.bridge.skipped ? " · " + window.bridge.skipped + (window.bridge.skipped === 1 ? " entrada omitida por error o nombre no UTF-8" : " entradas omitidas por error o nombre no UTF-8") : "") + (window.clipboardPath !== "" ? " · Portapapeles (" + (window.clipboardMode === "cut" ? "cortar" : "copiar") + "): " + window.clipboardName : "")))
             textFormat: Text.PlainText
             color: GemaTheme.darkText ? "#263d50" : "#ffffff"
             elide: Text.ElideRight
@@ -386,11 +492,159 @@ FloatingWindow {
             }
         }
         function onShowHiddenChanged() { hiddenCheck.checked = window.bridge.showHidden; }
+        function onMutationSucceeded(action, sourcePath, targetPath) {
+            window.uiError = "";
+            if (action === "move") { window.clipboardPath = ""; window.clipboardName = ""; window.clipboardMode = ""; }
+            if (window.clipboardPath !== "" && sourcePath !== "" && (window.clipboardPath === sourcePath || window.clipboardPath.startsWith(sourcePath + "/"))) {
+                if (action === "trash") {
+                    window.clipboardPath = ""; window.clipboardName = ""; window.clipboardMode = "";
+                } else if (action === "rename") {
+                    if (!targetPath) {
+                        window.clipboardPath = ""; window.clipboardName = ""; window.clipboardMode = "";
+                    } else if (window.clipboardPath === sourcePath) {
+                        window.clipboardPath = targetPath;
+                        window.clipboardName = targetPath.slice(targetPath.lastIndexOf("/") + 1);
+                    } else {
+                        window.clipboardPath = targetPath + window.clipboardPath.slice(sourcePath.length);
+                    }
+                }
+            }
+            const messages = {mkdir: "Carpeta creada", rename: "Renombrado", trash: "Movido a la papelera", copy: "Copiado", move: "Movido"};
+            if (messages[action]) window.showStatus(messages[action]);
+        }
+        function onStatusNotice(message) { window.showStatus(message); }
+    }
+    Shortcut { sequence: "Ctrl+Shift+N"; enabled: window.bridge.ready && !window.bridge.busy && window.bridge.path !== "" && !window.modalOpen; onActivated: window.openMkdirDialog() }
+    Shortcut { sequence: "F2"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.openRenameDialog(window.selectedEntry()) }
+    Shortcut { sequence: "Delete"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.openTrashDialog(window.selectedEntry()) }
+    Shortcut { sequence: "Ctrl+C"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.setClipboard(window.selectedEntry(), "copy") }
+    Shortcut { sequence: "Ctrl+X"; enabled: window.canMutate && window.selectedEntry() !== null; onActivated: window.setClipboard(window.selectedEntry(), "cut") }
+    Shortcut { sequence: "Ctrl+V"; enabled: window.canMutate && window.clipboardPath !== "" && window.bridge.path !== ""; onActivated: window.pasteClipboard() }
+    Menu {
+        id: entryMenu
+        parent: surface
+        padding: 6
+        background: MattePanel { overlay: true; radius: 12 }
+        GlassMenuItem { text: "Abrir"; onTriggered: window.openEntry(window.contextEntry) }
+        GlassMenuItem { text: "Copiar"; onTriggered: window.setClipboard(window.contextEntry, "copy") }
+        GlassMenuItem { text: "Cortar"; onTriggered: window.setClipboard(window.contextEntry, "cut") }
+        GlassMenuItem { text: "Renombrar"; enabled: !window.bridge.busy; onTriggered: window.openRenameDialog(window.contextEntry) }
+        GlassMenuItem { text: "Copiar ruta"; onTriggered: window.copyPath(window.contextEntry ? window.contextEntry.path : "") }
+        GlassMenuItem { text: "Mover a papelera"; enabled: !window.bridge.busy; onTriggered: window.openTrashDialog(window.contextEntry) }
+    }
+    Menu {
+        id: folderMenu
+        parent: surface
+        padding: 6
+        background: MattePanel { overlay: true; radius: 12 }
+        GlassMenuItem { text: "Nueva carpeta"; enabled: !window.bridge.busy && window.bridge.path !== ""; onTriggered: window.openMkdirDialog() }
+        GlassMenuItem { text: "Pegar"; enabled: window.clipboardPath !== "" && !window.bridge.busy; onTriggered: window.pasteClipboard() }
+        GlassMenuItem { text: "Copiar ruta de carpeta"; onTriggered: window.copyPath(window.bridge.path) }
+        GlassMenuItem { text: "Abrir terminal aquí"; onTriggered: window.bridge.openTerminal(window.bridge.path) }
+        GlassMenuItem { text: "Actualizar"; enabled: !window.bridge.busy && window.bridge.path !== ""; onTriggered: { window.bridge.list(window.bridge.path, window.bridge.showHidden, "refresh"); window.bridge.loadPlaces(); } }
+    }
+    GlassDialog {
+        id: mkdirDialog
+        parent: surface
+        title: "Nueva carpeta"
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(420, window.width - 40)
+        onOpened: { mkdirInput.text = ""; mkdirInput.forceActiveFocus(); }
+        function submit() {
+            if (!window.validName(mkdirInput.text)) return;
+            window.bridge.mkdir(window.bridge.path, mkdirInput.text.trim());
+            mkdirDialog.close();
+        }
+        contentItem: TextField {
+            id: mkdirInput
+            placeholderText: "Nombre de la carpeta"
+            selectByMouse: true
+            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+            background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
+            onAccepted: mkdirDialog.submit()
+        }
+        footer: Item {
+            implicitHeight: 64
+            RowLayout {
+                anchors.right: parent.right
+                anchors.rightMargin: 20
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+                ActionButton { text: "Cancelar"; onClicked: mkdirDialog.close() }
+                ActionButton { text: "Crear"; accent: true; enabled: window.validName(mkdirInput.text); onClicked: mkdirDialog.submit() }
+            }
+        }
+    }
+    GlassDialog {
+        id: renameDialog
+        parent: surface
+        property var targetEntry: null
+        title: "Renombrar"
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(420, window.width - 40)
+        onOpened: { renameInput.text = renameDialog.targetEntry ? renameDialog.targetEntry.name : ""; renameInput.forceActiveFocus(); renameInput.selectAll(); }
+        function submit() {
+            if (!renameDialog.targetEntry || !window.validName(renameInput.text)) return;
+            window.bridge.renameEntry(renameDialog.targetEntry.path, renameInput.text.trim());
+            renameDialog.close();
+        }
+        contentItem: TextField {
+            id: renameInput
+            placeholderText: "Nuevo nombre"
+            selectByMouse: true
+            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+            background: GlassPanel { topColor: "#18ffffff"; bottomColor: "#10ffffff"; edgeColor: "#48ffffff" }
+            onAccepted: renameDialog.submit()
+        }
+        footer: Item {
+            implicitHeight: 64
+            RowLayout {
+                anchors.right: parent.right
+                anchors.rightMargin: 20
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+                ActionButton { text: "Cancelar"; onClicked: renameDialog.close() }
+                ActionButton { text: "Renombrar"; accent: true; enabled: window.validName(renameInput.text); onClicked: renameDialog.submit() }
+            }
+        }
+    }
+    GlassDialog {
+        id: trashDialog
+        parent: surface
+        property var targetEntry: null
+        title: "Mover a la papelera"
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(420, window.width - 40)
+        contentItem: Text {
+            text: "¿Mover «" + (trashDialog.targetEntry ? trashDialog.targetEntry.name : "") + "» a la papelera?"
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: GemaTheme.darkText ? "#263d50" : "#ffffff"
+            font.pixelSize: 14
+        }
+        footer: Item {
+            implicitHeight: 64
+            RowLayout {
+                anchors.right: parent.right
+                anchors.rightMargin: 20
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+                ActionButton { text: "Cancelar"; onClicked: trashDialog.close() }
+                ActionButton {
+                    text: "Mover a papelera"
+                    accent: true
+                    onClicked: {
+                        if (trashDialog.targetEntry) window.bridge.trashEntry(trashDialog.targetEntry.path);
+                        trashDialog.close();
+                    }
+                }
+            }
+        }
     }
     Shortcut { sequence: "Alt+Left"; onActivated: window.bridge.back() }
     Shortcut { sequence: "Alt+Right"; onActivated: window.bridge.forward() }
     Shortcut { sequence: "Alt+Up"; onActivated: { if (window.bridge.parentPath && window.bridge.parentPath !== window.bridge.path) window.bridge.list(window.bridge.parentPath, window.bridge.showHidden, "navigate"); } }
-    Shortcut { sequence: "Ctrl+L"; enabled: window.bridge.ready && !window.bridge.loading; onActivated: window.startEditPath() }
+    Shortcut { sequence: "Ctrl+L"; enabled: window.bridge.ready && !window.bridge.busy; onActivated: window.startEditPath() }
     Shortcut { sequence: "Ctrl+F"; onActivated: { search.forceActiveFocus(); search.selectAll(); } }
     Shortcut { sequence: "Ctrl+1"; onActivated: window.switchView(true) }
     Shortcut { sequence: "Ctrl+2"; onActivated: window.switchView(false) }

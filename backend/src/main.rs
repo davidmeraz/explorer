@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::UNIX_EPOCH;
 
 fn event(kind: &str, data: Value) -> Value {
@@ -339,6 +340,348 @@ fn places(data: &Value) -> Result<Value, String> {
     ))
 }
 
+fn validate_entry_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() || name == "." || name == ".." || name.contains(['/', '\0']) {
+        return Err("Nombre de elemento inválido".into());
+    }
+    Ok(())
+}
+
+fn directory(raw: &str) -> Result<PathBuf, String> {
+    if raw.is_empty() || raw.contains('\0') || !Path::new(raw).is_absolute() {
+        return Err("La ruta debe ser absoluta y válida".into());
+    }
+    let path = fs::canonicalize(raw).map_err(|e| e.to_string())?;
+    if !path.is_dir() {
+        return Err("La ruta no es un directorio".into());
+    }
+    Ok(path)
+}
+
+fn resolve_entry_path(raw: &str) -> Result<(PathBuf, PathBuf, String), String> {
+    let path = Path::new(raw);
+    if raw.is_empty() || raw.contains('\0') || !path.is_absolute() {
+        return Err("La ruta debe ser absoluta y válida".into());
+    }
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Nombre inválido")?
+        .to_owned();
+    validate_entry_name(&name)?;
+    let parent = directory(
+        path.parent()
+            .and_then(Path::to_str)
+            .ok_or("Directorio padre inválido")?,
+    )?;
+    let src = parent.join(&name);
+    fs::symlink_metadata(&src).map_err(|e| e.to_string())?;
+    Ok((parent, src, name))
+}
+
+fn copy_entry_recursive(src: &Path, dst: &Path) -> io::Result<()> {
+    let meta = fs::symlink_metadata(src)?;
+    if meta.file_type().is_symlink() {
+        std::os::unix::fs::symlink(fs::read_link(src)?, dst)
+    } else if meta.is_file() {
+        fs::copy(src, dst).map(|_| ())
+    } else if meta.is_dir() {
+        fs::create_dir(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            copy_entry_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Archivo especial no admitido",
+        ))
+    }
+}
+
+fn remove_entry(path: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(path)?.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+fn move_entry(src: &Path, dst: &Path) -> io::Result<()> {
+    match fs::rename(src, dst) {
+        Err(e) if e.raw_os_error() == Some(18) => {
+            if let Err(e) = copy_entry_recursive(src, dst) {
+                let _ = remove_entry(dst);
+                return Err(e);
+            }
+            if let Err(e) = remove_entry(src) {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!(
+                        "La copia quedó en {} pero no se pudo eliminar el origen {}: {e}",
+                        dst.display(),
+                        src.display()
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        result => result,
+    }
+}
+
+fn encoded_path(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut result = String::new();
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+            result.push(b as char);
+        } else {
+            result.push_str(&format!("%{b:02X}"));
+        }
+    }
+    result
+}
+
+fn deletion_date() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let z = (seconds / 86400) as i64 + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    let t = seconds % 86400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}",
+        t / 3600,
+        t / 60 % 60,
+        t % 60
+    )
+}
+
+fn trash_with_data_dir(raw_path: &str, data_home: &Path) -> Result<Value, String> {
+    let (parent, src, name) = resolve_entry_path(raw_path)?;
+    let trash = data_home.join("Trash");
+    fs::create_dir_all(trash.join("files")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(trash.join("info")).map_err(|e| e.to_string())?;
+    let trash = fs::canonicalize(trash).map_err(|e| e.to_string())?;
+    if src == trash || trash.starts_with(&src) {
+        return Err("No se puede enviar la papelera o sus ancestros a la papelera".into());
+    }
+    if src.starts_with(&trash) {
+        return Err("El elemento ya está en la papelera".into());
+    }
+    for n in 1u64.. {
+        let candidate = if n == 1 {
+            name.clone()
+        } else {
+            format!("{name}.{n}")
+        };
+        let dest = trash.join("files").join(&candidate);
+        if fs::symlink_metadata(&dest).is_ok() {
+            continue;
+        }
+        let info = trash.join("info").join(format!("{candidate}.trashinfo"));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&info)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        if fs::symlink_metadata(&dest).is_ok() {
+            let _ = fs::remove_file(&info);
+            continue;
+        }
+        let result = writeln!(
+            file,
+            "[Trash Info]\nPath={}\nDeletionDate={}",
+            encoded_path(&src),
+            deletion_date()
+        )
+        .and_then(|_| move_entry(&src, &dest));
+        if let Err(e) = result {
+            if fs::symlink_metadata(&dest).is_err() {
+                let _ = fs::remove_file(&info);
+            }
+            return Err(e.to_string());
+        }
+        return Ok(event(
+            "fs.mutated",
+            json!({"action":"trash", "path":src, "targetPath":dest, "parent":parent}),
+        ));
+    }
+    unreachable!()
+}
+
+fn valid_terminal(term: &str) -> bool {
+    !term.is_empty()
+        && !term.chars().any(|c| c.is_whitespace() || c == '\0')
+        && (!term.contains('/') || Path::new(term).is_absolute())
+}
+
+fn is_wezterm(prog: &str) -> bool {
+    Path::new(prog).file_name().and_then(|s| s.to_str()) == Some("wezterm")
+}
+
+fn field<'a>(data: &'a Value, key: &str) -> Result<&'a str, String> {
+    data.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{key} debe ser una cadena"))
+}
+
+fn mutation(kind: &str, data: &Value) -> Result<Value, String> {
+    match kind {
+        "fs.mkdir" => {
+            let parent = directory(field(data, "parent")?)?;
+            let name = field(data, "name")?;
+            validate_entry_name(name)?;
+            let target = parent.join(name);
+            fs::create_dir(&target).map_err(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    "Ya existe un elemento con ese nombre".into()
+                } else {
+                    e.to_string()
+                }
+            })?;
+            Ok(event(
+                "fs.mutated",
+                json!({"action":"mkdir", "path":target, "parent":parent}),
+            ))
+        }
+        "fs.rename" => {
+            let (parent, src, _) = resolve_entry_path(field(data, "path")?)?;
+            let name = field(data, "newName")?;
+            validate_entry_name(name)?;
+            let dst = parent.join(name);
+            if src != dst {
+                if fs::symlink_metadata(&dst).is_ok() {
+                    return Err("Ya existe un elemento con ese nombre".into());
+                }
+                fs::rename(&src, &dst).map_err(|e| e.to_string())?;
+            }
+            Ok(event(
+                "fs.mutated",
+                json!({"action":"rename", "path":src, "targetPath":dst, "parent":parent}),
+            ))
+        }
+        "fs.trash" => {
+            let data_home = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+                .ok_or("HOME no está definido")?;
+            trash_with_data_dir(field(data, "path")?, &data_home)
+        }
+        "fs.copy" | "fs.move" => {
+            let (parent, src, name) = resolve_entry_path(field(data, "source")?)?;
+            let dest_dir = directory(field(data, "destDir")?)?;
+            let meta = fs::symlink_metadata(&src).map_err(|e| e.to_string())?;
+            if meta.is_dir()
+                && dest_dir.starts_with(fs::canonicalize(&src).map_err(|e| e.to_string())?)
+            {
+                return Err("No se puede copiar una carpeta dentro de sí misma".into());
+            }
+            if kind == "fs.move" && parent == dest_dir {
+                return Err("El elemento ya está en esa carpeta".into());
+            }
+            let mut dst = dest_dir.join(&name);
+            if kind == "fs.move" && fs::symlink_metadata(&dst).is_ok() {
+                return Err("Ya existe un elemento con ese nombre en la carpeta destino".into());
+            }
+            if kind == "fs.copy" {
+                let split = if !meta.is_dir() {
+                    name.rfind('.').filter(|i| *i > 0)
+                } else {
+                    None
+                };
+                let (stem, ext) = split.map(|i| name.split_at(i)).unwrap_or((&name, ""));
+                let mut n = 1;
+                while fs::symlink_metadata(&dst).is_ok() {
+                    let suffix = if n == 1 {
+                        "copia".to_owned()
+                    } else {
+                        format!("copia {n}")
+                    };
+                    dst = dest_dir.join(format!("{stem} ({suffix}){ext}"));
+                    n += 1;
+                }
+                if let Err(e) = copy_entry_recursive(&src, &dst) {
+                    let _ = remove_entry(&dst);
+                    return Err(e.to_string());
+                }
+            } else {
+                move_entry(&src, &dst).map_err(|e| e.to_string())?;
+            }
+            Ok(event(
+                "fs.mutated",
+                json!({"action":if kind == "fs.copy" {"copy"} else {"move"}, "path":src, "targetPath":dst, "parent":dest_dir}),
+            ))
+        }
+        "fs.openTerminal" => {
+            let dir = directory(field(data, "path")?)?;
+            let mut programs = Vec::new();
+            if let Ok(term) = std::env::var("TERMINAL") {
+                if valid_terminal(&term) {
+                    programs.push(term);
+                }
+            }
+            programs.extend(
+                [
+                    "kitty",
+                    "foot",
+                    "alacritty",
+                    "ghostty",
+                    "wezterm",
+                    "konsole",
+                    "gnome-terminal",
+                    "xterm",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
+            );
+            for prog in programs {
+                let mut command = Command::new(&prog);
+                if is_wezterm(&prog) {
+                    command.arg("start").arg("--cwd").arg(&dir);
+                }
+                match command
+                    .current_dir(&dir)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                {
+                    Ok(mut child) => {
+                        std::thread::spawn(move || {
+                            let _ = child.wait();
+                        });
+                        return Ok(event(
+                            "fs.terminalOpened",
+                            json!({"path":dir, "terminal":prog}),
+                        ));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(format!("No se pudo abrir terminal: {e}")),
+                }
+            }
+            Err("No hay ningún terminal disponible".into())
+        }
+        _ => unreachable!(),
+    }
+}
+
 fn handle(line: &str, ping_count: &mut u64) -> Value {
     let result = (|| -> Result<Value, String> {
         let command: Value =
@@ -363,6 +706,10 @@ fn handle(line: &str, ping_count: &mut u64) -> Value {
                 "fs.places",
                 places(command.get("data").unwrap_or(&Value::Null))?,
             )),
+            Some(
+                kind @ ("fs.mkdir" | "fs.rename" | "fs.trash" | "fs.copy" | "fs.move"
+                | "fs.openTerminal"),
+            ) => mutation(kind, command.get("data").unwrap_or(&Value::Null)),
             _ => Err("Acción no reconocida por el motor Rust".into()),
         }
     })();
@@ -411,6 +758,130 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn terminal_selection() {
+        assert!(!valid_terminal("bin/terminal"));
+        assert!(!valid_terminal("./terminal"));
+        assert!(!valid_terminal("terminal --flag"));
+        assert!(!valid_terminal("terminal\0"));
+        assert!(valid_terminal("terminal"));
+        assert!(valid_terminal("/usr/bin/wezterm"));
+        assert!(is_wezterm("/usr/bin/wezterm"));
+        assert!(is_wezterm("wezterm"));
+        assert!(!is_wezterm("not-wezterm"));
+    }
+
+    #[test]
+    fn trash_broken_symlink() {
+        let temp = Temp::new();
+        let src = temp.0.join("broken");
+        let data = temp.0.join("data");
+        std::os::unix::fs::symlink("missing", &src).unwrap();
+        trash_with_data_dir(src.to_str().unwrap(), &data).unwrap();
+        let dest = data.join("Trash/files/broken");
+        assert!(fs::symlink_metadata(&src).is_err());
+        assert_eq!(fs::read_link(dest).unwrap(), Path::new("missing"));
+        assert!(data.join("Trash/info/broken.trashinfo").exists());
+    }
+
+    #[test]
+    fn mutations_and_trash() {
+        let temp = Temp::new();
+        let root = &temp.0;
+        let call = |kind, data| mutation(kind, &data);
+        call("fs.mkdir", json!({"parent":root,"name":"one"})).unwrap();
+        assert!(call("fs.mkdir", json!({"parent":root,"name":"one"})).is_err());
+        for name in ["..", "a/b", " "] {
+            assert!(call("fs.mkdir", json!({"parent":root,"name":name})).is_err());
+        }
+        fs::write(root.join("file.txt"), "original").unwrap();
+        fs::write(root.join("other"), "other").unwrap();
+        assert!(call(
+            "fs.rename",
+            json!({"path":root.join("file.txt"),"newName":"other"})
+        )
+        .is_err());
+        assert_eq!(fs::read(root.join("other")).unwrap(), b"other");
+        call(
+            "fs.rename",
+            json!({"path":root.join("file.txt"),"newName":"new.txt"}),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(root.join("one"), root.join("link")).unwrap();
+        call(
+            "fs.rename",
+            json!({"path":root.join("link"),"newName":"link2"}),
+        )
+        .unwrap();
+        assert!(root.join("one").is_dir());
+        let copy = call(
+            "fs.copy",
+            json!({"source":root.join("new.txt"),"destDir":root}),
+        )
+        .unwrap();
+        assert!(copy["data"]["targetPath"]
+            .as_str()
+            .unwrap()
+            .ends_with("new (copia).txt"));
+        fs::write(root.join("one/inside"), "x").unwrap();
+        std::os::unix::fs::symlink("inside", root.join("one/link")).unwrap();
+        call("fs.copy", json!({"source":root.join("one"),"destDir":root})).unwrap();
+        assert!(fs::symlink_metadata(root.join("one (copia)/link"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(call(
+            "fs.copy",
+            json!({"source":root.join("one"),"destDir":root.join("one")})
+        )
+        .is_err());
+        assert!(call(
+            "fs.move",
+            json!({"source":root.join("one"),"destDir":root.join("one")})
+        )
+        .is_err());
+        assert!(call(
+            "fs.move",
+            json!({"source":root.join("new.txt"),"destDir":root})
+        )
+        .is_err());
+        fs::write(root.join("one/new.txt"), "occupied").unwrap();
+        assert!(call(
+            "fs.move",
+            json!({"source":root.join("new.txt"),"destDir":root.join("one")})
+        )
+        .is_err());
+        call(
+            "fs.move",
+            json!({"source":root.join("other"),"destDir":root.join("one")}),
+        )
+        .unwrap();
+        assert!(root.join("one/other").exists());
+        let data = root.join("data");
+        fs::create_dir(&data).unwrap();
+        fs::write(root.join("space #"), "x").unwrap();
+        trash_with_data_dir(root.join("space #").to_str().unwrap(), &data).unwrap();
+        let info = fs::read_to_string(data.join("Trash/info/space #.trashinfo")).unwrap();
+        assert!(info.contains("space%20%23\nDeletionDate="));
+        assert_eq!(
+            info.lines().last().unwrap().len(),
+            "DeletionDate=2024-01-01T00:00:00".len()
+        );
+        fs::write(root.join("space #"), "y").unwrap();
+        trash_with_data_dir(root.join("space #").to_str().unwrap(), &data).unwrap();
+        assert!(data.join("Trash/info/space #.2.trashinfo").exists());
+        assert!(trash_with_data_dir(data.join("Trash").to_str().unwrap(), &data).is_err());
+        assert!(trash_with_data_dir(root.to_str().unwrap(), &data).is_err());
+        trash_with_data_dir(root.join("link2").to_str().unwrap(), &data).unwrap();
+        assert!(root.join("one").is_dir());
+        assert!(fs::symlink_metadata(data.join("Trash/files/link2"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(call("fs.openTerminal", json!({"path":root.join("missing")})).is_err());
+        assert!(call("fs.openTerminal", json!({"path":root.join("new.txt")})).is_err());
+    }
 
     #[test]
     fn sorting_and_validation() {

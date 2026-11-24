@@ -27,7 +27,7 @@ ShellRoot {
         onTriggered: {
             ++root.ticks;
             if (bridge.error) { console.error("SMOKE_ERROR: " + bridge.error); Qt.quit(); return; }
-            if (!bridge.ready || bridge.loading || !bridge.path) return;
+            if (!bridge.ready || bridge.busy || !bridge.path) return;
             if (root.phase < 0) {
                 if (root.ticks > 100) { console.error("SMOKE_ERROR: estado o geometría Hyprland no confirmados: fase=" + root.phase + " cliente=" + JSON.stringify(root.client)); Qt.quit(); return; }
                 if (!clientQuery.running) clientQuery.running = true;
@@ -120,6 +120,28 @@ ShellRoot {
                 if (!bridge.path.endsWith("/segunda") || bridge.entries.length !== 0 || window.searchField.text !== "") {
                     console.error("SMOKE_ERROR: navegación"); Qt.quit(); return;
                 }
+                root.phase = 10;
+                bridge.mkdir(bridge.path, "demo");
+            } else if (root.phase === 10) {
+                if (!bridge.entries.some(e => e.name === "demo" && e.isDir)) { console.error("SMOKE_ERROR: mkdir"); Qt.quit(); return; }
+                root.phase = 11;
+                bridge.renameEntry(bridge.path + "/demo", "renombrada");
+            } else if (root.phase === 11) {
+                if (!bridge.entries.some(e => e.name === "renombrada") || bridge.entries.some(e => e.name === "demo")) { console.error("SMOKE_ERROR: rename"); Qt.quit(); return; }
+                const renamed = bridge.entries.find(e => e.name === "renombrada");
+                window.setClipboard(renamed, "copy");
+                if (window.clipboardPath !== renamed.path) { console.error("SMOKE_ERROR: portapapeles copiar"); Qt.quit(); return; }
+                root.phase = 12;
+                window.pasteClipboard();
+            } else if (root.phase === 12) {
+                if (!bridge.entries.some(e => e.name === "renombrada (copia)")) { console.error("SMOKE_ERROR: copy"); Qt.quit(); return; }
+                const copy = bridge.entries.find(e => e.name === "renombrada (copia)");
+                window.setClipboard(copy, "copy");
+                root.phase = 13;
+                bridge.trashEntry(copy.path);
+            } else if (root.phase === 13) {
+                if (bridge.entries.some(e => e.name === "renombrada (copia)") || !bridge.entries.some(e => e.name === "renombrada")) { console.error("SMOKE_ERROR: trash"); Qt.quit(); return; }
+                if (window.clipboardPath !== "") { console.error("SMOKE_ERROR: portapapeles tras papelera"); Qt.quit(); return; }
                 console.log("EXPLORER_SMOKE_OK");
                 Qt.quit();
             }
